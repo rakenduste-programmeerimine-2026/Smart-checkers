@@ -8,6 +8,7 @@ Nutika kabelaua mänguserver. Laud (Arduino UNO R4 WiFi, 32 reed-lülitit, LED-r
 - `src/game/rules.ts`: kabe (vene kabe) reeglid, mis hõlmavad kohustuslikku löömist, lendavat tammi, türgi löögi keeldu, tammiks saamist löömise ajal ning võitu ja viiki.
 - `src/game/sensors.ts`: laua 32-bitise hõivatusmaski tõlgendamine käiguks.
 - `src/game/ai.ts`: AI vastane (negamax alfa-beeta kärpimisega). Tasemed on `beginner` (2 poolkäiku, teeb vahel vigu), `medium` (4 poolkäiku) ja `strong` (7 poolkäiku). Lisaks on `suggestMove` vihje andmiseks.
+- `src/record/`: mängude salvestamine laua magnetite järgi. `Game` peab mängu logi (käik ja aeg, tagasivõtt), `BoardTracker` paneb käigu kirja alles siis, kui laua mask on püsinud (vaikimisi 300 ms), `toPdn` ja `gameFromPdn` teevad PDN-ekspordi ja -impordi (vene kabe, GameType 25) ning `GameStore` salvestab mängud JSON-failidena.
 
 ## Käivitamine
 
