@@ -7,6 +7,7 @@ Nutika kabelaua mänguserver. Laud (Arduino UNO R4 WiFi, 32 reed-lülitit, LED-r
 - `src/game/squares.ts`: tumedate ruutude numeratsioon 0–31, mis vastab laua reed-lülitite bittidele.
 - `src/game/rules.ts`: kabe (vene kabe) reeglid, mis hõlmavad kohustuslikku löömist, lendavat tammi, türgi löögi keeldu, tammiks saamist löömise ajal ning võitu ja viiki.
 - `src/game/sensors.ts`: laua 32-bitise hõivatusmaski tõlgendamine käiguks.
+- `src/game/ai.ts`: AI vastane (negamax alfa-beeta kärpimisega). Tasemed on `beginner` (2 poolkäiku, teeb vahel vigu), `medium` (4 poolkäiku) ja `strong` (7 poolkäiku). Lisaks on `suggestMove` vihje andmiseks.
 
 ## Käivitamine
 
