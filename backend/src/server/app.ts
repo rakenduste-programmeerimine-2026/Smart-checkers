@@ -1,31 +1,26 @@
 /**
  * Mänguserveri REST API (Fastify).
  *
- * Mängud hoitakse praegu mälus; andmebaasi lisab hiljem see, kes salvestamisega tegeleb.
+ * Mängud hoitakse praegu mälus (GameStore). Laua lõpp-punktid on failis board/routes.ts.
  */
 import Fastify, { type FastifyInstance } from 'fastify';
-import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { applyMove, findMove, formatMove, gameResult, initialPosition, legalMoves } from '../game/rules.js';
 import { squareName } from '../game/squares.js';
-import type { Color, GameResult, Position } from '../game/types.js';
-import { suggestMove, type AiLevel } from '../ai/engine.js';
+import type { GameResult, Position } from '../game/types.js';
+import { suggestMove } from '../ai/engine.js';
 import type { Opponent, OpponentKind, OpponentMove } from '../ai/opponent.js';
+import { registerBoardRoutes, type BoardTimingOptions } from '../board/routes.js';
+import { GameStore, type Game } from './games.js';
+import { HttpError, parse } from './http.js';
 
-export interface Game {
-  id: string;
-  /** Kes mängib arvuti vastu: null = kaks inimest laual. */
-  opponent: OpponentKind | null;
-  level: AiLevel;
-  humanColor: Color;
-  position: Position;
-  history: string[];
-  createdAt: string;
-}
+export type { Game } from './games.js';
 
 export interface AppOptions {
   opponents: Record<OpponentKind, Opponent>;
   logger?: boolean;
+  /** Laua ajastused (testides lühemad) ja kell. */
+  board?: BoardTimingOptions;
 }
 
 const Level = z.enum(['beginner', 'medium', 'strong']);
@@ -46,15 +41,6 @@ const AiMoveBody = z.object({
   level: Level.default('medium'),
 });
 
-class HttpError extends Error {
-  constructor(
-    readonly statusCode: number,
-    message: string,
-  ) {
-    super(message);
-  }
-}
-
 function replay(moves: string[]): { position: Position; history: string[] } {
   let position = initialPosition();
   const history: string[] = [];
@@ -67,7 +53,7 @@ function replay(moves: string[]): { position: Position; history: string[] } {
   return { position, history };
 }
 
-function serializePosition(position: Position) {
+export function serializePosition(position: Position) {
   return {
     turn: position.turn,
     pieces: position.board.flatMap((piece, sq) =>
@@ -77,7 +63,7 @@ function serializePosition(position: Position) {
   };
 }
 
-function serializeGame(game: Game) {
+export function serializeGame(game: Game) {
   const result: GameResult = gameResult(game.position);
   return {
     id: game.id,
@@ -86,12 +72,13 @@ function serializeGame(game: Game) {
     humanColor: game.humanColor,
     createdAt: game.createdAt,
     history: game.history,
+    aiThinking: game.aiThinking,
     result,
     ...serializePosition(game.position),
   };
 }
 
-function serializeAiMove(m: OpponentMove | null) {
+export function serializeAiMove(m: OpponentMove | null) {
   if (!m) return null;
   return {
     move: m.notation,
@@ -105,18 +92,11 @@ function serializeAiMove(m: OpponentMove | null) {
   };
 }
 
-function parse<S extends z.ZodTypeAny>(schema: S, value: unknown): z.output<S> {
-  const result = schema.safeParse(value ?? {});
-  if (!result.success) {
-    const issue = result.error.issues[0];
-    throw new HttpError(400, `Vigane sisend: ${issue?.path.join('.') || 'body'} ${issue?.message ?? ''}`.trim());
-  }
-  return result.data;
-}
-
 export function buildApp(options: AppOptions): FastifyInstance {
   const app = Fastify({ logger: options.logger ?? false });
-  const games = new Map<string, Game>();
+  const store = new GameStore(options.opponents, (error) =>
+    app.log.error({ err: error }, 'AI käik ebaõnnestus'),
+  );
 
   app.setErrorHandler((error, _req, reply) => {
     const status = error instanceof HttpError ? error.statusCode : (error.statusCode ?? 500);
@@ -124,38 +104,22 @@ export function buildApp(options: AppOptions): FastifyInstance {
   });
 
   const getGame = (id: string): Game => {
-    const game = games.get(id);
+    const game = store.get(id);
     if (!game) throw new HttpError(404, 'Mängu ei leitud');
     return game;
-  };
-
-  /** Kui on AI kord, laseb AI-l käia. */
-  const aiTurn = async (game: Game): Promise<OpponentMove | null> => {
-    if (!game.opponent || game.position.turn === game.humanColor) return null;
-    if (gameResult(game.position).status !== 'ongoing') return null;
-    const choice = await options.opponents[game.opponent].chooseMove(game.position, game.level);
-    if (!choice) return null;
-    game.position = applyMove(game.position, choice.move);
-    game.history.push(choice.notation);
-    return choice;
   };
 
   app.get('/health', async () => ({ status: 'ok' }));
 
   app.post('/api/games', async (req, reply) => {
     const body = parse(CreateGameBody, req.body);
-    const game: Game = {
-      id: randomUUID(),
+    const game = store.create({
       opponent: body.opponent === 'none' ? null : body.opponent,
       level: body.level,
       humanColor: body.humanColor,
-      position: initialPosition(),
-      history: [],
-      createdAt: new Date().toISOString(),
-    };
-    games.set(game.id, game);
+    });
     // Kui inimene on must, alustab AI.
-    const aiMove = await aiTurn(game);
+    const aiMove = await store.aiTurn(game);
     reply.status(201);
     return { game: serializeGame(game), aiMove: serializeAiMove(aiMove) };
   });
@@ -165,14 +129,21 @@ export function buildApp(options: AppOptions): FastifyInstance {
   app.post<{ Params: { id: string } }>('/api/games/:id/moves', async (req) => {
     const game = getGame(req.params.id);
     const { move: text } = parse(MoveBody, req.body);
-    if (gameResult(game.position).status !== 'ongoing') throw new HttpError(409, 'Mäng on juba läbi');
-    if (game.opponent && game.position.turn !== game.humanColor) throw new HttpError(409, 'Praegu on AI kord');
+    if (store.isOver(game)) throw new HttpError(409, 'Mäng on juba läbi');
+    if (!store.canHumanMove(game)) throw new HttpError(409, 'Praegu on AI kord');
     const move = findMove(game.position, text);
     if (!move) throw new HttpError(422, `Käik "${text}" pole seaduslik või pole üheselt mõistetav`);
-    game.position = applyMove(game.position, move);
-    game.history.push(formatMove(move));
-    const aiMove = await aiTurn(game);
+    store.play(game, move);
+    const aiMove = await store.aiTurn(game);
     return { game: serializeGame(game), aiMove: serializeAiMove(aiMove) };
+  });
+
+  app.post<{ Params: { id: string } }>('/api/games/:id/undo', async (req) => {
+    const game = getGame(req.params.id);
+    if (game.aiThinking) throw new HttpError(409, 'AI mõtleb, oota hetk');
+    const undone = store.undo(game);
+    if (undone === 0) throw new HttpError(409, 'Pole käiku, mida tagasi võtta');
+    return { game: serializeGame(game), undone };
   });
 
   app.post<{ Params: { id: string } }>('/api/games/:id/hint', async (req) => {
@@ -188,6 +159,8 @@ export function buildApp(options: AppOptions): FastifyInstance {
     const choice = await options.opponents[body.opponent].chooseMove(position, body.level);
     return { position: serializePosition(position), aiMove: serializeAiMove(choice) };
   });
+
+  registerBoardRoutes(app, store, options.board);
 
   return app;
 }
