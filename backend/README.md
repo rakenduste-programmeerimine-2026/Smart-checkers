@@ -7,18 +7,54 @@ Nutika kabelaua mänguserver. Laud (Arduino UNO R4 WiFi, 32 reed-lülitit, LED-r
 - `src/game/squares.ts`: tumedate ruutude numeratsioon 0–31, mis vastab laua reed-lülitite bittidele.
 - `src/game/rules.ts`: kabe (vene kabe) reeglid, mis hõlmavad kohustuslikku löömist, lendavat tammi, türgi löögi keeldu, tammiks saamist löömise ajal ning võitu ja viiki.
 - `src/game/sensors.ts`: laua 32-bitise hõivatusmaski tõlgendamine käiguks.
-- `src/game/ai.ts`: AI vastane (negamax alfa-beeta kärpimisega). Tasemed on `beginner` (2 poolkäiku, teeb vahel vigu), `medium` (4 poolkäiku) ja `strong` (7 poolkäiku). Lisaks on `suggestMove` vihje andmiseks.
+- `src/ai/engine.ts`: kohalik AI mootor (negamax alfa-beeta kärpimisega). Tasemed on `beginner` (2 poolkäiku, teeb vahel vigu), `medium` (4 poolkäiku) ja `strong` (7 poolkäiku). Lisaks on `suggestMove` vihje andmiseks.
+- `src/ai/claude.ts`: AI vastane välise AI API (Claude) kaudu. Mudel saab laua seisu ja nummerdatud seaduslikud käigud ning valib neist ühe, nii et ebaseaduslikku käiku ta teha ei saa. Kui API ei vasta, käib kohalik mootor.
+- `src/server/`: REST API (Fastify).
 
 ## Käivitamine
 
 ```bash
 npm install
+npm run dev       # server pordil 3000, muudatustel taaskäivitus
 npm test          # testid (Vitest)
 npm run typecheck # TypeScripti kontroll
 npm run build     # kompileerib kausta dist/
 ```
 
 Vaja on Node 20 või uuemat.
+
+### Keskkonnamuutujad
+
+| Muutuja | Vaikimisi | Tähendus |
+| --- | --- | --- |
+| `ANTHROPIC_API_KEY` | – | Claude API võti välise AI vastase jaoks. Ilma selleta mängib kohalik mootor. |
+| `AI_MODEL` | `claude-opus-5-5` | Claude mudel |
+| `PORT` | `3000` | Serveri port |
+| `HOST` | `0.0.0.0` | Kuulatav aadress (laud ja telefon on samas võrgus) |
+
+## REST API
+
+Kõik vastused on JSON-is. Vead tulevad kujul `{ "error": "..." }` ja koodiga 400 (vigane sisend), 404 (mängu pole), 409 (pole sinu kord või mäng on läbi) või 422 (ebaseaduslik käik).
+
+| Meetod | Tee | Keha | Vastus |
+| --- | --- | --- | --- |
+| `GET` | `/health` | – | `{ status: "ok" }` |
+| `POST` | `/api/games` | `{ opponent?: "claude" \| "engine" \| "none", level?: "beginner" \| "medium" \| "strong", humanColor?: "white" \| "black" }` | `{ game, aiMove }` (AI alustab, kui inimene on must) |
+| `GET` | `/api/games/:id` | – | `{ game }` |
+| `POST` | `/api/games/:id/moves` | `{ move: "c3-d4" }` | `{ game, aiMove }` (AI vastukäik kohe sama vastusega) |
+| `POST` | `/api/games/:id/hint` | – | `{ hint: "c3-d4" }` |
+| `POST` | `/api/ai/move` | `{ moves: ["c3-d4", ...], opponent?, level? }` | `{ position, aiMove }` (olekuta: käigud algusest) |
+
+`game` sisaldab välju `id`, `opponent`, `level`, `humanColor`, `turn`, `pieces` (`[{ square, color, king }]`), `legalMoves`, `history` ja `result` (`ongoing`, `win` koos `winner`-iga või `draw`).
+
+`aiMove` sisaldab välju `move`, `from`, `path`, `captures`, `promotes`, `source` (`claude` või `engine`), `reason` (AI põhjendus) ja `fallbackReason` (miks kohalik mootor välise AI asemel käis).
+
+Näide:
+
+```bash
+curl -X POST localhost:3000/api/games -H 'content-type: application/json' -d '{"opponent":"claude","level":"medium"}'
+curl -X POST localhost:3000/api/games/<id>/moves -H 'content-type: application/json' -d '{"move":"c3-d4"}'
+```
 
 ## Ruudud ja laua bitid
 

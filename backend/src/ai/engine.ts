@@ -8,9 +8,9 @@
  * - strong: otsib 7 poolkäiku sügavale ja jätkab löömisseisudes otsingut
  *   (vaikuse otsing), et mitte jätta nuppu lüüa.
  */
-import { DRAW_QUIET_KING_PLIES, applyMove, legalMoves } from './rules.js';
-import { rankOf } from './squares.js';
-import type { Color, Move, Position } from './types.js';
+import { DRAW_QUIET_KING_PLIES, applyMove, legalMoves } from '../game/rules.js';
+import { rankOf } from '../game/squares.js';
+import type { Color, Move, Position } from '../game/types.js';
 
 export type AiLevel = 'beginner' | 'medium' | 'strong';
 

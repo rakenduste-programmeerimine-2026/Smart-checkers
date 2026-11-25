@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { chooseMove, evaluate, rankMoves, suggestMove, type AiLevel } from '../../src/game/ai.js';
+import { chooseMove, evaluate, rankMoves, suggestMove, type AiLevel } from '../../src/ai/engine.js';
 import { applyMove, formatMove, initialPosition, legalMoves, setupPosition } from '../../src/game/rules.js';
 
 const LEVELS: AiLevel[] = ['beginner', 'medium', 'strong'];
