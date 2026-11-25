@@ -1,0 +1,22 @@
+{
+  "name": "smart-checkers-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Nutika kabelaua mänguserver: kabe reeglid, AI ja API iOS äpile ning Arduino lauale",
+  "type": "module",
+  "main": "dist/index.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.8"
+  }
+}
