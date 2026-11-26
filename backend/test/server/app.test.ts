@@ -108,6 +108,19 @@ describe('REST API', () => {
   });
 });
 
+describe('male kell', () => {
+  it('loob kellaga mängu ja käivitab kella esimese käiguga', async () => {
+    start();
+    const { game } = (await app.inject({ method: 'POST', url: '/api/games', payload: { opponent: 'none', clockMinutes: 10 } })).json();
+    expect(game.clock).toEqual({ initialMs: 600_000, white: 600_000, black: 600_000, running: null });
+    const moved = (await app.inject({ method: 'POST', url: `/api/games/${game.id}/moves`, payload: { move: 'c3-d4' } })).json();
+    expect(moved.game.clock.running).toBe('black');
+    expect(moved.game.clock.white).toBe(600_000);
+    const bad = await app.inject({ method: 'POST', url: '/api/games', payload: { clockMinutes: 999 } });
+    expect(bad.statusCode).toBe(400);
+  });
+});
+
 describe('laua API', () => {
   it('laud alustab mängu, saadab maski ja saab LCD ning LED-id', async () => {
     start();

@@ -38,7 +38,7 @@ const maskOf = (pos: Position) => occupancyMask(pos.board);
 
 beforeEach(() => {
   t = 0;
-  store = new GameStore({ engine: createEngineOpponent(() => 0), claude: firstMove });
+  store = new GameStore({ engine: createEngineOpponent(() => 0), claude: firstMove }, undefined, { now: () => new Date(t) });
   board = new BoardController('laud1', store, { now: () => t, timing: { settleMs: 100, errorMs: 1000 } });
 });
 
@@ -149,11 +149,13 @@ describe('BoardController', () => {
     press(1);
     expect(press(1).lcd[0]).toBe('>Sina:valge     ');
     expect(press(2).lcd[0]).toBe('>Sina:must      ');
+    expect(press(1).lcd[0]).toBe('>Kell:valjas    ');
+    expect(press(2).lcd[0]).toBe('>Kell:5 min     ');
     expect(press(1).lcd[0]).toBe('>Kordus         ');
     press(1);
     press(2);
     const game = board.game!;
-    expect(game).toMatchObject({ opponent: 'engine', humanColor: 'black' });
+    expect(game).toMatchObject({ opponent: 'engine', humanColor: 'black', clock: { initialMs: 300_000 } });
     expect(board.status().state).toBe('waiting-board');
     place(INITIAL);
     await flush();
@@ -185,5 +187,46 @@ describe('BoardController', () => {
     const end = place(maskOf(game.position));
     expect(end.effect).toBe('win-black');
     expect(end.lcd[0]).toBe('Must voitis!    ');
+  });
+
+  it('näitab male kella ja lõpetab mängu, kui aeg saab otsa', () => {
+    const game = startGame({ opponent: 'none', clockMinutes: 5 });
+    expect(board.update({}).lcd[1]).toBe('V 5:00    M 5:00');
+    const afterC3 = applyMove(initialPosition(), findMove(initialPosition(), 'c3-d4')!);
+    place(maskOf(afterC3));
+    expect(game.history).toEqual(['c3-d4']);
+    t += 61_000;
+    expect(board.update({}).lcd[1]).toBe('V 5:00    M 3:59');
+    t += 5 * 60_000;
+    const end = board.update({});
+    expect(end.lcd).toEqual(['Valge voitis!   ', 'Aeg sai otsa    ']);
+    expect(end.effect).toBe('win-white');
+    expect(store.canHumanMove(game)).toBe(false);
+  });
+
+  it('annab teada, kui Claude ei vastanud ja käis varumootor', async () => {
+    store = new GameStore({
+      engine: createEngineOpponent(),
+      claude: {
+        kind: 'claude',
+        async chooseMove(pos) {
+          const move = legalMoves(pos)[0]!;
+          return { move, notation: formatMove(move), source: 'engine', fallbackReason: 'AI API pole kättesaadav' };
+        },
+      },
+    });
+    board = new BoardController('laud1', store, { now: () => t, timing: { settleMs: 100, errorMs: 1000 } });
+    startGame({ opponent: 'claude' });
+    place(maskOf(applyMove(initialPosition(), findMove(initialPosition(), 'c3-d4')!)));
+    await flush();
+    expect(place(board.status().mask ? Number(board.status().mask) : 0).lcd).toEqual(['Claude ei vasta ', 'Kais arvuti     ']);
+  });
+
+  it('näitab, kas laud on võrgus', () => {
+    expect(board.status()).toMatchObject({ online: false, lastSeenAt: null });
+    board.update({ mask: INITIAL });
+    expect(board.status().online).toBe(true);
+    t += 10_000;
+    expect(board.status().online).toBe(false);
   });
 });

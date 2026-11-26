@@ -42,7 +42,7 @@ Kõik vastused on JSON-is. Vead tulevad kujul `{ "error": "..." }` ja koodiga 40
 | Meetod | Tee | Keha | Vastus |
 | --- | --- | --- | --- |
 | `GET` | `/health` | – | `{ status: "ok" }` |
-| `POST` | `/api/games` | `{ opponent?: "claude" \| "engine" \| "none", level?: "beginner" \| "medium" \| "strong", humanColor?: "white" \| "black" }` | `{ game, aiMove }` (AI alustab, kui inimene on must) |
+| `POST` | `/api/games` | `{ opponent?: "claude" \| "engine" \| "none", level?: "beginner" \| "medium" \| "strong", humanColor?: "white" \| "black", clockMinutes?: 0–180 }` | `{ game, aiMove }` (AI alustab, kui inimene on must) |
 | `GET` | `/api/games?limit=50` | – | `{ games: [{ id, meta, moveCount, result, endedAt? }] }` (uuemad eespool, ka kettal olevad) |
 | `GET` | `/api/games/:id` | – | `{ game }` (mälust või kettalt) |
 | `GET` | `/api/games/:id/pdn` | – | PDN-fail (vene kabe, GameType 25) |
@@ -103,7 +103,9 @@ LED-riba on üks 160 LED-iga tükk, mis käib ridade kaupa edasi-tagasi: `a1 →
 | B2 | Võta käik tagasi (ilma mänguta: uus mäng) | Vali või muuda |
 | B3 | Ava menüü | Sulge menüü |
 
-Menüüs on uus mäng, vastane (Claude, arvuti, inimene), raskusaste, sinu värv ja praeguse mängu kordus. Pärast uut mängu või tagasivõttu näitavad LED-id, kuhu nupp panna ja kust ära võtta, kuni laud on õiges seisus. Tammiks saamisel kuvab LCD "Tamm! Pane kroon peale".
+Menüüs on uus mäng, vastane (Claude, arvuti, inimene), raskusaste, sinu värv, male kell (väljas, 5, 10, 15 või 30 minutit) ja praeguse mängu kordus.
+
+Kellaga mängus näitab LCD teisel real mõlema poole aega (`V 4:32    M 5:00`). Kell käivitub esimese käiguga ja kui aeg saab otsa, võidab vastane. Kui Claude API ei vasta ja käib kohalik mootor, kuvab LCD "Claude ei vasta / Käis arvuti". `GET /api/board/:boardId` näitab väljadega `online` ja `lastSeenAt`, kas laud on võrgus. Pärast uut mängu või tagasivõttu näitavad LED-id, kuhu nupp panna ja kust ära võtta, kuni laud on õiges seisus. Tammiks saamisel kuvab LCD "Tamm! Pane kroon peale".
 
 ## Ruudud ja laua bitid
 

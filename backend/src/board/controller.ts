@@ -10,7 +10,7 @@
  *
  * Nupud: 1 = vihje, 2 = käigu tagasivõtt, 3 = menüü. Menüüs: 1 = järgmine, 2 = vali, 3 = välju.
  */
-import { finalSquare, formatMove, gameResult, legalMoves } from '../game/rules.js';
+import { finalSquare, formatMove, legalMoves } from '../game/rules.js';
 import { detectMove, occupancyMask, squaresInMask } from '../game/sensors.js';
 import type { Square } from '../game/squares.js';
 import type { Color, Move, Position } from '../game/types.js';
@@ -40,7 +40,12 @@ export interface BoardSettings {
   opponent: OpponentSetting;
   level: AiLevel;
   humanColor: Color;
+  /** Male kell minutites, 0 = kellata. */
+  clockMinutes: number;
 }
+
+/** Kui kaua pärast viimast päringut loetakse laud võrgus olevaks. */
+export const ONLINE_MS = 5000;
 
 export interface BoardStatus {
   id: string;
@@ -52,10 +57,14 @@ export interface BoardStatus {
   /** Korduse puhul: mitmes käik (0 = algseis). */
   replayPly?: number;
   settings: BoardSettings;
+  /** Kas laud on viimase 5 sekundi jooksul ühendust võtnud. */
+  online: boolean;
+  lastSeenAt: string | null;
 }
 
-type MenuItem = 'new' | 'opponent' | 'level' | 'color' | 'replay';
-const MENU_ITEMS: MenuItem[] = ['new', 'opponent', 'level', 'color', 'replay'];
+type MenuItem = 'new' | 'opponent' | 'level' | 'color' | 'clock' | 'replay';
+const MENU_ITEMS: MenuItem[] = ['new', 'opponent', 'level', 'color', 'clock', 'replay'];
+const CLOCK_MINUTES = [0, 5, 10, 15, 30];
 const OPPONENTS: OpponentSetting[] = ['claude', 'engine', 'none'];
 const LEVELS: AiLevel[] = ['beginner', 'medium', 'strong'];
 const OPPONENT_LABEL: Record<OpponentSetting, string> = { claude: 'Claude', engine: 'arvuti', none: 'inimene' };
@@ -70,7 +79,7 @@ export interface BoardControllerOptions {
 }
 
 export class BoardController {
-  readonly settings: BoardSettings = { opponent: 'claude', level: 'medium', humanColor: 'white' };
+  readonly settings: BoardSettings = { opponent: 'claude', level: 'medium', humanColor: 'white', clockMinutes: 0 };
   private readonly timing: BoardTiming;
   private readonly now: () => number;
 
@@ -86,6 +95,9 @@ export class BoardController {
   private menuIndex: number | null = null;
   /** Mängu kordus laual: LED-id näitavad käike ükshaaval, mask ei loe. */
   private replay: { gameId: string; ply: number } | null = null;
+  private lastSeen: number | null = null;
+  /** Mitmenda käigu AI varumootori teadet on juba näidatud. */
+  private fallbackNoticePly = -1;
 
   constructor(
     readonly id: string,
@@ -123,10 +135,12 @@ export class BoardController {
     if (settings.opponent) this.settings.opponent = settings.opponent;
     if (settings.level) this.settings.level = settings.level;
     if (settings.humanColor) this.settings.humanColor = settings.humanColor;
+    if (settings.clockMinutes !== undefined) this.settings.clockMinutes = settings.clockMinutes;
     const game = this.store.create({
       opponent: this.settings.opponent === 'none' ? null : this.settings.opponent,
       level: this.settings.level,
       humanColor: this.settings.humanColor,
+      clockMs: this.settings.clockMinutes * 60_000,
     });
     this.attach(game);
     return game;
@@ -135,6 +149,7 @@ export class BoardController {
   /** Laua uus olek. Tagastab, mida laud peab nüüd näitama. */
   update(input: { mask?: number; buttons?: BoardButton[] }): BoardDisplay {
     const now = this.now();
+    this.lastSeen = now;
     if (input.mask !== undefined) {
       const mask = input.mask >>> 0;
       if (mask !== this.mask) {
@@ -157,6 +172,8 @@ export class BoardController {
       boardPly: this.boardPly,
       state: this.state(),
       settings: { ...this.settings },
+      online: this.lastSeen !== null && this.now() - this.lastSeen < ONLINE_MS,
+      lastSeenAt: this.lastSeen === null ? null : new Date(this.lastSeen).toISOString(),
     };
   }
 
@@ -205,6 +222,12 @@ export class BoardController {
     }
 
     if (this.boardPly < game.history.length) {
+      const aiPly = game.history.length - 1;
+      if (game.lastAiMove?.fallbackReason && this.fallbackNoticePly !== aiPly) {
+        // Claude API ei vastanud, käis kohalik mootor: anna sellest teada.
+        this.fallbackNoticePly = aiPly;
+        this.flash(['Claude ei vasta', 'Käis arvuti']);
+      }
       // Laual tehakse järele AI või äpi käiku; mitu käiku korraga on samuti lubatud.
       for (let ply = game.history.length; ply > this.boardPly; ply--) {
         if (occupancyMask(game.positions[ply]!.board) === mask) {
@@ -312,6 +335,8 @@ export class BoardController {
       this.menuIndex = null;
     } else if (item === 'opponent') {
       this.settings.opponent = next(OPPONENTS, this.settings.opponent);
+    } else if (item === 'clock') {
+      this.settings.clockMinutes = next(CLOCK_MINUTES, this.settings.clockMinutes);
     } else if (item === 'level') {
       this.settings.level = next(LEVELS, this.settings.level);
     } else {
@@ -354,10 +379,10 @@ export class BoardController {
     if (this.boardPly < game.history.length) return this.pendingDisplay(game, mask);
 
     const position = game.position;
-    const result = gameResult(position);
+    const result = this.store.result(game);
     if (result.status === 'win') {
       return {
-        lines: [result.winner === 'white' ? 'Valge võitis!' : 'Must võitis!', 'B3 menüü'],
+        lines: [result.winner === 'white' ? 'Valge võitis!' : 'Must võitis!', result.reason === 'time' ? 'Aeg sai otsa' : 'B3 menüü'],
         leds: [],
         effect: result.winner === 'white' ? 'win-white' : 'win-black',
       };
@@ -365,7 +390,7 @@ export class BoardController {
     if (result.status === 'draw') return { lines: ['Viik!', 'B3 menüü'], leds: [], effect: 'draw' };
 
     const expected = occupancyMask(position.board);
-    const counts = countLine(position);
+    const counts = game.clock ? this.clockLine(game) : countLine(position);
     if (game.aiThinking) {
       const leds = mask !== expected && this.stableFor(this.timing.errorMs) ? errorLeds(expected, mask) : [];
       return { lines: ['AI mõtleb...', counts], leds };
@@ -441,6 +466,16 @@ export class BoardController {
     };
   }
 
+  private clockLine(game: Game): string {
+    const fmt = (ms: number) => {
+      const s = Math.ceil(ms / 1000);
+      return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+    };
+    const white = `V ${fmt(this.store.remaining(game, 'white'))}`;
+    const black = `M ${fmt(this.store.remaining(game, 'black'))}`;
+    return `${white}${' '.repeat(Math.max(1, 16 - white.length - black.length))}${black}`;
+  }
+
   private menuLines(index: number): [string, string] {
     const item = MENU_ITEMS[index]!;
     const label =
@@ -452,7 +487,9 @@ export class BoardController {
             ? `Tase:${LEVEL_LABEL[this.settings.level]}`
             : item === 'color'
               ? `Sina:${this.settings.humanColor === 'white' ? 'valge' : 'must'}`
-              : 'Kordus';
+              : item === 'clock'
+                ? `Kell:${this.settings.clockMinutes === 0 ? 'väljas' : `${this.settings.clockMinutes} min`}`
+                : 'Kordus';
     return [`>${label}`, 'B1 edasi B2 vali'];
   }
 }
