@@ -18,3 +18,10 @@ Esimene väljalase: mänguserver nutikale kabelauale (vene kabe).
 - Võrgumäng kahe laua vahel.
 - Turvalisus: ligipääsuvõtmed, päringulimiidid, turvapäised.
 - OpenAPI kirjeldus (`/api/openapi.json`), Dockerfile ja docker-compose.
+
+### Parandatud
+- `canUndo` arvestab nüüd ka ülesandeid ja reitingumänge (enne näitas äpp tagasivõtu nuppu, mis andis vea).
+- Tagasivõtt tühistab viigipakkumise.
+- Lõppenud mängus (alistumine, viik) ei näidata enam seaduslikke käike.
+- `GET /api/games/:id` näitab mängijate nimesid ja reitingut.
+- PDN import loeb `FEN`-päise, nii et eksporditud ülesanded ja algseisuga mängud saab tagasi importida.

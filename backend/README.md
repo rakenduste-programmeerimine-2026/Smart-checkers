@@ -76,7 +76,7 @@ Kõik vastused on JSON-is. Vead tulevad kujul `{ "error": "..." }` ja koodiga 40
 | `GET` | `/api/games?limit=50` | – | `{ games: [{ id, meta, moveCount, result, endedAt? }] }` (uuemad eespool, ka kettal olevad) |
 | `GET` | `/api/games/:id` | – | `{ game }` (mälust või kettalt) |
 | `GET` | `/api/games/:id/pdn` | – | PDN-fail (vene kabe, GameType 25) |
-| `POST` | `/api/games/import` | `{ pdn: "..." }` | `{ game }` (kahe inimese mänguks) |
+| `POST` | `/api/games/import` | `{ pdn: "..." }` | `{ game }` (kahe inimese mänguks; `FEN`-päise korral algab mäng sellest seisust) |
 | `DELETE` | `/api/games/:id` | – | 204 |
 | `POST` | `/api/games/:id/moves` | `{ move: "c3-d4", expectedPly?: 0 }` | `{ game, aiMove, duplicate? }` (AI vastukäik kohe sama vastusega) |
 | `POST` | `/api/games/:id/hint` | – | `{ hint: "c3-d4", detail: { from, path, captures } }` |

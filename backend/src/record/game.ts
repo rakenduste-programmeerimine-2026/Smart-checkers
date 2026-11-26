@@ -5,7 +5,7 @@
  * mitte värvi ega tammi: seisu saab usaldusväärselt jälgida ainult tuntud algusest.
  */
 import { randomUUID } from 'node:crypto';
-import { applyMove, findMove, formatMove, gameResult, initialPosition } from '../game/rules.js';
+import { applyMove, findMove, formatMove, gameResult, initialPosition, parsePositionKey, positionKey } from '../game/rules.js';
 import type { GameResult, Move, Position } from '../game/types.js';
 
 export interface GameMeta {
@@ -72,18 +72,21 @@ export interface GameOptions {
   id?: string;
   meta?: Partial<GameMeta>;
   now?: () => Date;
+  /** Algseis, kui mäng ei alga tavalisest algseisust (näiteks ülesanne või FEN). */
+  start?: Position;
 }
 
 export class Game {
   readonly id: string;
   readonly meta: GameMeta;
   private readonly now: () => Date;
-  private readonly positions: Position[] = [initialPosition()];
+  private readonly positions: Position[];
   private readonly log: RecordedMove[] = [];
   private endedAt: string | undefined;
 
   constructor(options: GameOptions = {}) {
     this.now = options.now ?? (() => new Date());
+    this.positions = [options.start ?? initialPosition()];
     this.id = options.id ?? randomUUID();
     this.meta = { ...options.meta, startedAt: options.meta?.startedAt ?? this.now().toISOString() };
   }
@@ -132,12 +135,16 @@ export class Game {
       result: this.result(),
     };
     if (this.endedAt) record.endedAt = this.endedAt;
+    const start = positionKey(this.positions[0]!);
+    if (start !== positionKey(initialPosition())) record.start = start;
     return record;
   }
 
   /** Taastab mängu kirjest, mängides käigud algseisust uuesti läbi. */
   static fromRecord(record: GameRecord): Game {
-    const game = new Game({ id: record.id, meta: record.meta });
+    const start = record.start ? parsePositionKey(record.start) : null;
+    if (record.start && !start) throw new Error('Vigane algseis');
+    const game = new Game({ id: record.id, meta: record.meta, ...(start ? { start } : {}) });
     for (const move of record.moves) game.play(move.text, new Date(move.at));
     return game;
   }
