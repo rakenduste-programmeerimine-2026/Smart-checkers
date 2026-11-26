@@ -25,6 +25,18 @@ npm run build     # kompileerib kausta dist/
 
 Vaja on Node 20 või uuemat.
 
+### Docker
+
+```bash
+cd backend
+docker compose up -d          # ehitab ja käivitab, andmed köites kabe-data
+# või ilma compose'ita:
+docker build -t smart-checkers .
+docker run -p 3000:3000 -v kabe-data:/data -e API_TOKEN=... -e BOARD_TOKEN=... smart-checkers
+```
+
+Konteiner töötab tavakasutajana (`node`), salvestab mängud ja mängijad kausta `/data` ning kontrollib ise oma tervist (`/health`). Võtmed pane faili `backend/.env`, mida gitti ei panda. CI ehitab konteineri igas PR-is ja kontrollib, et see käivitub.
+
 ### Keskkonnamuutujad
 
 | Muutuja | Vaikimisi | Tähendus |
