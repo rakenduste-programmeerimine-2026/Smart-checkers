@@ -5,7 +5,7 @@
  */
 import Fastify, { type FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { applyMove, findMove, formatMove, gameResult, initialPosition, legalMoves } from '../game/rules.js';
+import { applyMove, findMove, formatMove, initialPosition, legalMoves } from '../game/rules.js';
 import { squareName } from '../game/squares.js';
 import type { GameResult, Position } from '../game/types.js';
 import { suggestMove } from '../ai/engine.js';
@@ -36,6 +36,8 @@ const CreateGameBody = z.object({
   opponent: OpponentSchema.default('claude'),
   level: Level.default('medium'),
   humanColor: z.enum(['white', 'black']).default('white'),
+  /** Male kell minutites kummalegi poolele, 0 = kellata. */
+  clockMinutes: z.number().int().min(0).max(180).default(0),
 });
 
 const ListQuery = z.object({ limit: z.coerce.number().int().min(1).max(200).default(50) });
@@ -73,8 +75,16 @@ export function serializePosition(position: Position) {
   };
 }
 
-export function serializeGame(game: Game) {
-  const result: GameResult = gameResult(game.position);
+export function serializeGame(game: Game, store: GameStore) {
+  const result: GameResult = store.result(game);
+  const clock = game.clock
+    ? {
+        initialMs: game.clock.initialMs,
+        white: store.remaining(game, 'white'),
+        black: store.remaining(game, 'black'),
+        running: game.clock.runningSince !== null && result.status === 'ongoing' ? game.position.turn : null,
+      }
+    : null;
   const moveTimes = game.moveTimes;
   return {
     id: game.id,
@@ -84,6 +94,7 @@ export function serializeGame(game: Game) {
     createdAt: game.createdAt,
     history: game.history,
     moveTimes,
+    clock,
     aiThinking: game.aiThinking,
     result,
     ...serializePosition(game.position),
@@ -131,11 +142,12 @@ export function buildApp(options: AppOptions): FastifyInstance {
       opponent: body.opponent === 'none' ? null : body.opponent,
       level: body.level,
       humanColor: body.humanColor,
+      clockMs: body.clockMinutes * 60_000,
     });
     // Kui inimene on must, alustab AI.
     const aiMove = await store.aiTurn(game);
     reply.status(201);
-    return { game: serializeGame(game), aiMove: serializeAiMove(aiMove) };
+    return { game: serializeGame(game, store), aiMove: serializeAiMove(aiMove) };
   });
 
   app.get('/api/games', async (req) => {
@@ -153,10 +165,10 @@ export function buildApp(options: AppOptions): FastifyInstance {
       throw new HttpError(422, `PDN-i ei saanud lugeda: ${(error as Error).message}`);
     }
     reply.status(201);
-    return { game: serializeGame(game) };
+    return { game: serializeGame(game, store) };
   });
 
-  app.get<{ Params: { id: string } }>('/api/games/:id', async (req) => ({ game: serializeGame(await getGame(req.params.id)) }));
+  app.get<{ Params: { id: string } }>('/api/games/:id', async (req) => ({ game: serializeGame(await getGame(req.params.id), store) }));
 
   app.get<{ Params: { id: string } }>('/api/games/:id/pdn', async (req, reply) => {
     const game = await getGame(req.params.id);
@@ -181,7 +193,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
     if (!move) throw new HttpError(422, `Käik "${text}" pole seaduslik või pole üheselt mõistetav`);
     store.play(game, move);
     const aiMove = await store.aiTurn(game);
-    return { game: serializeGame(game), aiMove: serializeAiMove(aiMove) };
+    return { game: serializeGame(game, store), aiMove: serializeAiMove(aiMove) };
   });
 
   app.post<{ Params: { id: string } }>('/api/games/:id/undo', async (req) => {
@@ -189,7 +201,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
     if (game.aiThinking) throw new HttpError(409, 'AI mõtleb, oota hetk');
     const undone = store.undo(game);
     if (undone === 0) throw new HttpError(409, 'Pole käiku, mida tagasi võtta');
-    return { game: serializeGame(game), undone };
+    return { game: serializeGame(game, store), undone };
   });
 
   app.post<{ Params: { id: string } }>('/api/games/:id/hint', async (req) => {

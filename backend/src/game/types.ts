@@ -29,7 +29,8 @@ export interface Move {
 
 export type GameResult =
   | { status: 'ongoing' }
-  | { status: 'win'; winner: Color; reason: 'no-moves' }
+  /** no-moves = vastasel pole käike, time = vastase kell sai otsa. */
+  | { status: 'win'; winner: Color; reason: 'no-moves' | 'time' }
   | { status: 'draw'; reason: 'king-moves' };
 
 export function opponent(color: Color): Color {

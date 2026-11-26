@@ -41,6 +41,8 @@ export interface GameRecord {
   result: GameResult;
   /** ISO aeg, kui mäng lõppes. */
   endedAt?: string;
+  /** Kelle kell sai otsa (kui mäng lõppes aja tõttu). */
+  flagged?: 'white' | 'black';
 }
 
 export interface GameOptions {

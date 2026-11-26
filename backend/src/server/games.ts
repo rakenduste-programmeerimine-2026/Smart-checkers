@@ -8,7 +8,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { applyMove, findMove, formatMove, gameResult, initialPosition } from '../game/rules.js';
-import type { Color, GameResult, Move, Position } from '../game/types.js';
+import { opponent as other, type Color, type GameResult, type Move, type Position } from '../game/types.js';
 import type { AiLevel } from '../ai/engine.js';
 import type { Opponent, OpponentKind, OpponentMove } from '../ai/opponent.js';
 import type { GameRecord } from '../record/game.js';
@@ -33,13 +33,30 @@ export interface Game {
   /** AI arvutab praegu käiku. */
   aiThinking: boolean;
   lastAiMove: OpponentMove | null;
+  /** Male kell: kummagi järelejäänud aeg millisekundites. null = kellata mäng. */
+  clock: GameClock | null;
+}
+
+export interface GameClock {
+  /** Algaeg millisekundites. */
+  initialMs: number;
+  white: number;
+  black: number;
+  /** Millal käigul oleva poole kell käima läks (ms). null = kell seisab (enne esimest käiku). */
+  runningSince: number | null;
+  /** Kelle kell sai otsa. */
+  flagged: Color | null;
 }
 
 export interface NewGameOptions {
   opponent: OpponentKind | null;
   level: AiLevel;
   humanColor: Color;
+  /** Male kella algaeg millisekundites (kummalegi poolele). */
+  clockMs?: number | null;
 }
+
+export const MAX_CLOCK_MS = 3 * 60 * 60 * 1000;
 
 export interface GameStoreOptions {
   /** Kuhu mängud salvestada. Ilma selleta on mängud ainult mälus. */
@@ -50,6 +67,12 @@ export interface GameStoreOptions {
 }
 
 export const DEFAULT_MAX_GAMES = 500;
+
+function newClock(ms: number | null | undefined): GameClock | null {
+  if (!ms || ms <= 0) return null;
+  const initialMs = Math.min(ms, MAX_CLOCK_MS);
+  return { initialMs, white: initialMs, black: initialMs, runningSince: null, flagged: null };
+}
 
 const PLAYER_NAME: Record<OpponentKind, string> = { claude: 'Claude AI', engine: 'Arvuti' };
 
@@ -73,9 +96,11 @@ export class GameStore {
 
   create(options: NewGameOptions, id: string = randomUUID()): Game {
     const position = initialPosition();
+    const { clockMs, ...settings } = options;
     const game: Game = {
       id,
-      ...options,
+      ...settings,
+      clock: newClock(clockMs),
       position,
       history: [],
       moves: [],
@@ -129,11 +154,17 @@ export class GameStore {
       createdAt: record.meta.startedAt,
       aiThinking: false,
       lastAiMove: null,
+      clock: newClock(settings.clockMs),
     };
     for (const { text, at } of record.moves) {
       const move = findMove(game.position, text);
       if (!move) throw new Error(`Salvestatud mängus ${record.id} on vigane käik ${text}`);
       this.apply(game, move, at);
+    }
+    if (game.clock && record.flagged) {
+      game.clock.flagged = record.flagged;
+      game.clock[record.flagged] = 0;
+      game.clock.runningSince = null;
     }
     this.remember(game);
     return game;
@@ -177,7 +208,27 @@ export class GameStore {
   }
 
   result(game: Game): GameResult {
+    const clock = game.clock;
+    if (clock) {
+      if (!clock.flagged && gameResult(game.position).status === 'ongoing' && this.remaining(game, game.position.turn) <= 0) {
+        // Käigul oleva poole aeg sai otsa.
+        clock.flagged = game.position.turn;
+        clock[game.position.turn] = 0;
+        clock.runningSince = null;
+        this.persist(game);
+      }
+      if (clock.flagged) return { status: 'win', winner: other(clock.flagged), reason: 'time' };
+    }
     return gameResult(game.position);
+  }
+
+  /** Poole järelejäänud aeg millisekundites (käigul oleva poole kell käib). */
+  remaining(game: Game, color: Color): number {
+    const clock = game.clock;
+    if (!clock) return Infinity;
+    const running = clock.runningSince !== null && game.position.turn === color && !clock.flagged;
+    const spent = running ? this.now().getTime() - clock.runningSince! : 0;
+    return Math.max(0, clock[color] - spent);
   }
 
   isOver(game: Game): boolean {
@@ -244,6 +295,7 @@ export class GameStore {
     game.positions.length = last + 1;
     game.position = game.positions[last]!;
     game.lastAiMove = null;
+    if (game.clock) game.clock.runningSince = last === 0 ? null : this.now().getTime();
     this.persist(game);
     return removed;
   }
@@ -255,18 +307,34 @@ export class GameStore {
     const record: GameRecord = {
       id: game.id,
       meta: { event: 'Smart-checkers', white: name('white'), black: name('black'), startedAt: game.createdAt },
-      settings: { opponent: game.opponent, level: game.level, humanColor: game.humanColor },
+      settings: {
+        opponent: game.opponent,
+        level: game.level,
+        humanColor: game.humanColor,
+        clockMs: game.clock?.initialMs ?? null,
+      },
       moves: game.history.map((text, i) => ({ text, at: game.moveTimes[i] ?? game.createdAt })),
       result,
     };
     const lastTime = game.moveTimes[game.moveTimes.length - 1];
     if (result.status !== 'ongoing' && lastTime) record.endedAt = lastTime;
+    if (game.clock?.flagged) record.flagged = game.clock.flagged;
     return record;
   }
 
   // --- sisemine ---
 
   private apply(game: Game, move: Move, at: string): void {
+    const clock = game.clock;
+    if (clock) {
+      const atMs = Date.parse(at);
+      // Esimene käik käivitab kella; edasi läheb käija aeg maha.
+      if (clock.runningSince !== null) {
+        const mover = game.position.turn;
+        clock[mover] = Math.max(0, clock[mover] - Math.max(0, atMs - clock.runningSince));
+      }
+      clock.runningSince = atMs;
+    }
     game.position = applyMove(game.position, move);
     game.moves.push(move);
     game.history.push(formatMove(move));

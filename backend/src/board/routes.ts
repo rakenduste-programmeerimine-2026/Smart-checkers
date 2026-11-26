@@ -40,6 +40,7 @@ const NewGameBody = z.object({
   opponent: z.enum(['engine', 'claude', 'none']).optional(),
   level: z.enum(['beginner', 'medium', 'strong']).optional(),
   humanColor: z.enum(['white', 'black']).optional(),
+  clockMinutes: z.number().int().min(0).max(180).optional(),
 });
 
 export function registerBoardRoutes(app: FastifyInstance, store: GameStore, options: BoardControllerOptions = {}): void {
