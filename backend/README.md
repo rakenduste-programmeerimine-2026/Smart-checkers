@@ -129,6 +129,12 @@ Laud küsib serverilt umbes 5 korda sekundis. Kõik laua teed on kujul `/api/boa
 | `POST` | `/api/board/:boardId/attach` | `{ gameId }` | `{ board, display }` (seob äpis loodud mänguga) |
 | `POST` | `/api/board/:boardId/replay` | `{ gameId }` | `{ board, display }` (kordus laual: B1 tagasi, B2 edasi, B3 välja) |
 
+### Laua tervis ja test
+
+`GET /api/board/:boardId/health` annab `{ health: { online, requests, avgIntervalMs, maxGapMs, disconnects, log, sensors: { seen, flickering } } }`. `log` sisaldab viimase 50 ühenduse ja katkestuse aega (katkestus = laud ei küsinud 5 s). `flickering` loetleb ruudud, mille reed-lüliti lülitub kiiresti edasi-tagasi (tõenäoliselt lahti või magnet on piiri peal).
+
+Menüüs "Laua test" lülitab sisse testirežiimi: praegu hõivatud ruut on valge, varem nähtud roheline ja kunagi nähtamatu punane vilkuv. Lükka nupp üle kõigi ruutude ja kontrolli, et kõik läheksid roheliseks. LCD näitab "Andurid 18/32" ja värisevaid lüliteid. B1 süütab kõik LED-id valgelt (LED-riba test), B2 alustab andurite testi uuesti ja B3 väljub.
+
 ### Võrgumäng kahe laua vahel
 
 `POST /api/matches` kehaga `{ white: "laud1", black: "laud2", clockMinutes?: 5 }` seob kaks lauda ühe kahe inimese mänguga (201, `{ gameId, boards }`). Kumbki laud mängib ainult oma värviga: oma käik loetakse magnetitest, vastase käik süttib LED-idega (kollane algus, roheline lõpp) ja tuleb laual järele teha. LCD näitab "Sinu kord" või "Vastase kord" ning "Vastane eemal", kui teine laud pole 5 s ühendust võtnud (`board.match.peerOnline`). Menüüst saab pakkuda viiki (teisel laual "Vastane: viik? B2 jah B1 ei") ja alistuda. Võrgumängus tagasivõttu pole. Äpp saab mängu jälgida tavaliste mängu teede ja `/events` kaudu.
@@ -160,7 +166,7 @@ LED-riba on üks 160 LED-iga tükk, mis käib ridade kaupa edasi-tagasi: `a1 →
 | B2 | Võta käik tagasi (ilma mänguta: uus mäng) | Vali või muuda |
 | B3 | Ava menüü | Sulge menüü |
 
-Menüüs on uus mäng, vastane (Claude, arvuti, inimene), raskusaste, sinu värv, mängija (edetabelist või külaline), male kell, kabeülesanne (väljas, 5, 10, 15 või 30 minutit), praeguse mängu kordus, viigipakkumine ja alistumine. Kahe inimese mängus laua taga kehtib viik menüüst kohe; arvuti vastu otsustab AI. Mängu lõpus näitab LCD teisel real põhjust (näiteks "Seis kordus 3x" või "Alistumine").
+Menüüs on uus mäng, vastane (Claude, arvuti, inimene), raskusaste, sinu värv, mängija (edetabelist või külaline), male kell, kabeülesanne, laua test (väljas, 5, 10, 15 või 30 minutit), praeguse mängu kordus, viigipakkumine ja alistumine. Kahe inimese mängus laua taga kehtib viik menüüst kohe; arvuti vastu otsustab AI. Mängu lõpus näitab LCD teisel real põhjust (näiteks "Seis kordus 3x" või "Alistumine").
 
 Kellaga mängus näitab LCD teisel real mõlema poole aega (`V 4:32    M 5:00`). Kell käivitub esimese käiguga ja kui aeg saab otsa, võidab vastane. Kui Claude API ei vasta ja käib kohalik mootor, kuvab LCD "Claude ei vasta / Käis arvuti". `GET /api/board/:boardId` näitab väljadega `online` ja `lastSeenAt`, kas laud on võrgus. Pärast uut mängu või tagasivõttu näitavad LED-id, kuhu nupp panna ja kust ära võtta, kuni laud on õiges seisus. Tammiks saamisel kuvab LCD "Tamm! Pane kroon peale".
 
