@@ -48,12 +48,14 @@ export interface BoardStatus {
   mask: string | null;
   /** Mitu mängu käiku on laual tehtud. */
   boardPly: number;
-  state: 'no-game' | 'waiting-board' | 'setup' | 'pending-move' | 'ai-thinking' | 'play' | 'game-over' | 'menu';
+  state: 'no-game' | 'waiting-board' | 'setup' | 'pending-move' | 'ai-thinking' | 'play' | 'game-over' | 'menu' | 'replay';
+  /** Korduse puhul: mitmes käik (0 = algseis). */
+  replayPly?: number;
   settings: BoardSettings;
 }
 
-type MenuItem = 'new' | 'opponent' | 'level' | 'color';
-const MENU_ITEMS: MenuItem[] = ['new', 'opponent', 'level', 'color'];
+type MenuItem = 'new' | 'opponent' | 'level' | 'color' | 'replay';
+const MENU_ITEMS: MenuItem[] = ['new', 'opponent', 'level', 'color', 'replay'];
 const OPPONENTS: OpponentSetting[] = ['claude', 'engine', 'none'];
 const LEVELS: AiLevel[] = ['beginner', 'medium', 'strong'];
 const OPPONENT_LABEL: Record<OpponentSetting, string> = { claude: 'Claude', engine: 'arvuti', none: 'inimene' };
@@ -82,6 +84,8 @@ export class BoardController {
   private hint: { move: Move; until: number } | null = null;
   private message: { lines: [string, string]; until: number } | null = null;
   private menuIndex: number | null = null;
+  /** Mängu kordus laual: LED-id näitavad käike ükshaaval, mask ei loe. */
+  private replay: { gameId: string; ply: number } | null = null;
 
   constructor(
     readonly id: string,
@@ -104,6 +108,14 @@ export class BoardController {
     this.hint = null;
     this.message = null;
     this.menuIndex = null;
+    this.replay = null;
+  }
+
+  /** Mängib mängu laual käik-käigult läbi (B1 tagasi, B2 edasi, B3 välja). */
+  startReplay(game: Game): void {
+    this.replay = { gameId: game.id, ply: 0 };
+    this.menuIndex = null;
+    this.hint = null;
   }
 
   /** Alustab laualt uue mängu menüü seadetega. */
@@ -136,7 +148,9 @@ export class BoardController {
   }
 
   status(): BoardStatus {
+    const replay = this.replay ? { replayPly: this.replay.ply } : {};
     return {
+      ...replay,
       id: this.id,
       gameId: this.gameId,
       mask: this.mask === null ? null : maskHex(this.mask),
@@ -158,6 +172,7 @@ export class BoardController {
 
   private state(): BoardStatus['state'] {
     if (this.menuIndex !== null) return 'menu';
+    if (this.replay) return 'replay';
     const game = this.game;
     if (!game) return 'no-game';
     if (this.mask === null) return 'waiting-board';
@@ -171,7 +186,7 @@ export class BoardController {
   /** Tõlgendab stabiilset maski: seadistus, järele jõudmine või inimese käik. */
   private step(): void {
     const game = this.game;
-    if (!game || this.mask === null || !this.stableFor(this.timing.settleMs)) return;
+    if (this.replay || !game || this.mask === null || !this.stableFor(this.timing.settleMs)) return;
     const mask = this.mask;
 
     if (this.boardPly > game.history.length) {
@@ -224,6 +239,10 @@ export class BoardController {
       this.menuPress(button);
       return;
     }
+    if (this.replay) {
+      this.replayPress(button);
+      return;
+    }
     const game = this.game;
     if (button === 3) {
       this.menuIndex = 0;
@@ -260,6 +279,18 @@ export class BoardController {
     this.hint = null;
   }
 
+  private replayPress(button: BoardButton): void {
+    const replay = this.replay!;
+    const game = this.store.get(replay.gameId);
+    if (button === 3 || !game) {
+      this.replay = null;
+      if (this.game) this.needsSetup = true;
+      return;
+    }
+    if (button === 1) replay.ply = Math.max(0, replay.ply - 1);
+    if (button === 2) replay.ply = Math.min(game.history.length, replay.ply + 1);
+  }
+
   private menuPress(button: BoardButton): void {
     const index = this.menuIndex ?? 0;
     if (button === 3) {
@@ -273,6 +304,11 @@ export class BoardController {
     const item = MENU_ITEMS[index]!;
     if (item === 'new') {
       this.newGame();
+      this.menuIndex = null;
+    } else if (item === 'replay') {
+      const game = this.game;
+      if (game && game.history.length > 0) this.startReplay(game);
+      else this.flash(['Kordus', 'Pole käike']);
       this.menuIndex = null;
     } else if (item === 'opponent') {
       this.settings.opponent = next(OPPONENTS, this.settings.opponent);
@@ -301,6 +337,7 @@ export class BoardController {
 
   private baseDisplay(): { lines: [string, string]; leds: LedCommand[]; effect?: BoardDisplay['effect'] } {
     if (this.menuIndex !== null) return { lines: this.menuLines(this.menuIndex), leds: [] };
+    if (this.replay) return this.replayDisplay(this.replay);
     const game = this.game;
     if (!game) return { lines: ['Nutikas kabe', 'B2 uus  B3 menüü'], leds: [], effect: 'idle' };
     if (this.mask === null) return { lines: ['Ootan lauda...', ''], leds: [] };
@@ -368,6 +405,20 @@ export class BoardController {
     return { lines: [turn, counts], leds: [] };
   }
 
+  private replayDisplay(replay: { gameId: string; ply: number }): { lines: [string, string]; leds: LedCommand[] } {
+    const game = this.store.get(replay.gameId);
+    if (!game) return { lines: ['Kordus', 'Mängu pole'], leds: [] };
+    const total = game.history.length;
+    const move = game.moves[replay.ply];
+    if (!move) {
+      const result = this.store.result(game);
+      const text =
+        result.status === 'win' ? (result.winner === 'white' ? 'Valge võitis' : 'Must võitis') : result.status === 'draw' ? 'Viik' : 'Pooleli';
+      return { lines: [`Kordus ${total}/${total}`, text], leds: [] };
+    }
+    return { lines: [`Kordus ${replay.ply + 1}/${total}`, formatMove(move)], leds: moveLeds(move) };
+  }
+
   /** Käik, mis on mängus tehtud (AI või äpp), aga laual veel mitte. */
   private pendingDisplay(game: Game, mask: number): { lines: [string, string]; leds: LedCommand[] } {
     const move = game.moves[this.boardPly]!;
@@ -399,7 +450,9 @@ export class BoardController {
           ? `Vastane:${OPPONENT_LABEL[this.settings.opponent]}`
           : item === 'level'
             ? `Tase:${LEVEL_LABEL[this.settings.level]}`
-            : `Sina:${this.settings.humanColor === 'white' ? 'valge' : 'must'}`;
+            : item === 'color'
+              ? `Sina:${this.settings.humanColor === 'white' ? 'valge' : 'must'}`
+              : 'Kordus';
     return [`>${label}`, 'B1 edasi B2 vali'];
   }
 }

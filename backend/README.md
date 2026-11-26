@@ -31,6 +31,7 @@ Vaja on Node 20 või uuemat.
 | --- | --- | --- |
 | `ANTHROPIC_API_KEY` | – | Claude API võti välise AI vastase jaoks. Ilma selleta mängib kohalik mootor. |
 | `AI_MODEL` | `claude-opus-5-5` | Claude mudel |
+| `DATA_DIR` | `data` | Kaust, kuhu mängud JSON-failidena salvestatakse |
 | `PORT` | `3000` | Serveri port |
 | `HOST` | `0.0.0.0` | Kuulatav aadress (laud ja telefon on samas võrgus) |
 
@@ -42,7 +43,11 @@ Kõik vastused on JSON-is. Vead tulevad kujul `{ "error": "..." }` ja koodiga 40
 | --- | --- | --- | --- |
 | `GET` | `/health` | – | `{ status: "ok" }` |
 | `POST` | `/api/games` | `{ opponent?: "claude" \| "engine" \| "none", level?: "beginner" \| "medium" \| "strong", humanColor?: "white" \| "black" }` | `{ game, aiMove }` (AI alustab, kui inimene on must) |
-| `GET` | `/api/games/:id` | – | `{ game }` |
+| `GET` | `/api/games?limit=50` | – | `{ games: [{ id, meta, moveCount, result, endedAt? }] }` (uuemad eespool, ka kettal olevad) |
+| `GET` | `/api/games/:id` | – | `{ game }` (mälust või kettalt) |
+| `GET` | `/api/games/:id/pdn` | – | PDN-fail (vene kabe, GameType 25) |
+| `POST` | `/api/games/import` | `{ pdn: "..." }` | `{ game }` (kahe inimese mänguks) |
+| `DELETE` | `/api/games/:id` | – | 204 |
 | `POST` | `/api/games/:id/moves` | `{ move: "c3-d4" }` | `{ game, aiMove }` (AI vastukäik kohe sama vastusega) |
 | `POST` | `/api/games/:id/hint` | – | `{ hint: "c3-d4" }` |
 | `POST` | `/api/games/:id/undo` | – | `{ game, undone }` (inimese viimane käik ja AI vastus) |
@@ -69,6 +74,7 @@ Laud küsib serverilt umbes 5 korda sekundis. Kõik laua teed on kujul `/api/boa
 | `GET` | `/api/board/:boardId` | – | `{ board, display }` (olek äpi jaoks) |
 | `POST` | `/api/board/:boardId/games` | `{ opponent?, level?, humanColor? }` | `{ board, display }` (uus mäng laual) |
 | `POST` | `/api/board/:boardId/attach` | `{ gameId }` | `{ board, display }` (seob äpis loodud mänguga) |
+| `POST` | `/api/board/:boardId/replay` | `{ gameId }` | `{ board, display }` (kordus laual: B1 tagasi, B2 edasi, B3 välja) |
 
 Vastuses on `lcd` kaks 16-märgilist rida (täpitähed on asendatud, sest LCD neid ei oska), `leds` on nimekiri `{ square, led, color: "RRGGBB", mode: "solid" | "blink" | "pulse" }` ja `effect` on `none`, `idle` (hingav ootel valgus), `win-white`, `win-black` või `draw`. LED-id, mida nimekirjas pole, on kustus. `seq` muutub ainult siis, kui midagi muutub, nii et laud ei pea iga kord uuesti joonistama.
 
@@ -97,7 +103,7 @@ LED-riba on üks 160 LED-iga tükk, mis käib ridade kaupa edasi-tagasi: `a1 →
 | B2 | Võta käik tagasi (ilma mänguta: uus mäng) | Vali või muuda |
 | B3 | Ava menüü | Sulge menüü |
 
-Menüüs on uus mäng, vastane (Claude, arvuti, inimene), raskusaste ja sinu värv. Pärast uut mängu või tagasivõttu näitavad LED-id, kuhu nupp panna ja kust ära võtta, kuni laud on õiges seisus. Tammiks saamisel kuvab LCD "Tamm! Pane kroon peale".
+Menüüs on uus mäng, vastane (Claude, arvuti, inimene), raskusaste, sinu värv ja praeguse mängu kordus. Pärast uut mängu või tagasivõttu näitavad LED-id, kuhu nupp panna ja kust ära võtta, kuni laud on õiges seisus. Tammiks saamisel kuvab LCD "Tamm! Pane kroon peale".
 
 ## Ruudud ja laua bitid
 

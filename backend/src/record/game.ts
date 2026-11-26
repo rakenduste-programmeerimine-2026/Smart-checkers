@@ -23,10 +23,20 @@ export interface RecordedMove {
   at: string;
 }
 
+/** Mänguserveri seaded, et salvestatud mängu saaks jätkata samamoodi. */
+export interface RecordSettings {
+  opponent: 'engine' | 'claude' | null;
+  level: 'beginner' | 'medium' | 'strong';
+  humanColor: 'white' | 'black';
+  /** Male kella algaeg millisekundites, kui kell on kasutusel. */
+  clockMs?: number | null;
+}
+
 /** Salvestatav mängu kirje (JSON). */
 export interface GameRecord {
   id: string;
   meta: GameMeta;
+  settings?: RecordSettings;
   moves: RecordedMove[];
   result: GameResult;
   /** ISO aeg, kui mäng lõppes. */

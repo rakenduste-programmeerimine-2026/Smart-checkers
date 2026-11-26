@@ -71,9 +71,19 @@ export function registerBoardRoutes(app: FastifyInstance, store: GameStore, opti
   app.post('/api/board/:boardId/attach', async (req) => {
     const controller = board(req.params);
     const { gameId } = parse(AttachBody, req.body);
-    const game = store.get(gameId);
+    const game = await store.load(gameId);
     if (!game) throw new HttpError(404, 'Mängu ei leitud');
     controller.attach(game);
+    return view(controller);
+  });
+
+  /** Mängib salvestatud mängu laual LED-idega läbi. */
+  app.post('/api/board/:boardId/replay', async (req) => {
+    const controller = board(req.params);
+    const { gameId } = parse(AttachBody, req.body);
+    const game = await store.load(gameId);
+    if (!game) throw new HttpError(404, 'Mängu ei leitud');
+    controller.startReplay(game);
     return view(controller);
   });
 

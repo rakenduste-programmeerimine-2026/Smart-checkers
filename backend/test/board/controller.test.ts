@@ -149,6 +149,7 @@ describe('BoardController', () => {
     press(1);
     expect(press(1).lcd[0]).toBe('>Sina:valge     ');
     expect(press(2).lcd[0]).toBe('>Sina:must      ');
+    expect(press(1).lcd[0]).toBe('>Kordus         ');
     press(1);
     press(2);
     const game = board.game!;

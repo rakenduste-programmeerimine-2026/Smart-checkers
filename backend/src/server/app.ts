@@ -11,6 +11,8 @@ import type { GameResult, Position } from '../game/types.js';
 import { suggestMove } from '../ai/engine.js';
 import type { Opponent, OpponentKind, OpponentMove } from '../ai/opponent.js';
 import { registerBoardRoutes, type BoardTimingOptions } from '../board/routes.js';
+import { toPdn } from '../record/pdn.js';
+import type { GameStore as RecordStore } from '../record/store.js';
 import { GameStore, type Game } from './games.js';
 import { HttpError, parse } from './http.js';
 
@@ -21,6 +23,10 @@ export interface AppOptions {
   logger?: boolean;
   /** Laua ajastused (testides lühemad) ja kell. */
   board?: BoardTimingOptions;
+  /** Kuhu mängud salvestada (vaikimisi ainult mälus). */
+  records?: RecordStore;
+  /** Mitu mängu mälus hoida. */
+  maxGames?: number;
 }
 
 const Level = z.enum(['beginner', 'medium', 'strong']);
@@ -31,6 +37,10 @@ const CreateGameBody = z.object({
   level: Level.default('medium'),
   humanColor: z.enum(['white', 'black']).default('white'),
 });
+
+const ListQuery = z.object({ limit: z.coerce.number().int().min(1).max(200).default(50) });
+
+const ImportBody = z.object({ pdn: z.string().min(1).max(100_000) });
 
 const MoveBody = z.object({ move: z.string().min(4).max(64) });
 
@@ -65,6 +75,7 @@ export function serializePosition(position: Position) {
 
 export function serializeGame(game: Game) {
   const result: GameResult = gameResult(game.position);
+  const moveTimes = game.moveTimes;
   return {
     id: game.id,
     opponent: game.opponent ?? 'none',
@@ -72,6 +83,7 @@ export function serializeGame(game: Game) {
     humanColor: game.humanColor,
     createdAt: game.createdAt,
     history: game.history,
+    moveTimes,
     aiThinking: game.aiThinking,
     result,
     ...serializePosition(game.position),
@@ -94,17 +106,19 @@ export function serializeAiMove(m: OpponentMove | null) {
 
 export function buildApp(options: AppOptions): FastifyInstance {
   const app = Fastify({ logger: options.logger ?? false });
-  const store = new GameStore(options.opponents, (error) =>
-    app.log.error({ err: error }, 'AI käik ebaõnnestus'),
-  );
+  const store = new GameStore(options.opponents, (error) => app.log.error({ err: error }, 'Mängu viga'), {
+    records: options.records,
+    maxGames: options.maxGames,
+  });
+  app.addHook('onClose', async () => store.flush());
 
   app.setErrorHandler((error, _req, reply) => {
     const status = error instanceof HttpError ? error.statusCode : (error.statusCode ?? 500);
     reply.status(status).send({ error: status >= 500 ? 'Serveri viga' : error.message });
   });
 
-  const getGame = (id: string): Game => {
-    const game = store.get(id);
+  const getGame = async (id: string): Promise<Game> => {
+    const game = await store.load(id);
     if (!game) throw new HttpError(404, 'Mängu ei leitud');
     return game;
   };
@@ -124,10 +138,42 @@ export function buildApp(options: AppOptions): FastifyInstance {
     return { game: serializeGame(game), aiMove: serializeAiMove(aiMove) };
   });
 
-  app.get<{ Params: { id: string } }>('/api/games/:id', async (req) => ({ game: serializeGame(getGame(req.params.id)) }));
+  app.get('/api/games', async (req) => {
+    const { limit } = parse(ListQuery, req.query);
+    return { games: await store.list(limit) };
+  });
+
+  /** Impordib PDN-faili (näiteks teisest kabeprogrammist) kahe inimese mänguks. */
+  app.post('/api/games/import', async (req, reply) => {
+    const { pdn } = parse(ImportBody, req.body);
+    let game: Game;
+    try {
+      game = store.importPdn(pdn);
+    } catch (error) {
+      throw new HttpError(422, `PDN-i ei saanud lugeda: ${(error as Error).message}`);
+    }
+    reply.status(201);
+    return { game: serializeGame(game) };
+  });
+
+  app.get<{ Params: { id: string } }>('/api/games/:id', async (req) => ({ game: serializeGame(await getGame(req.params.id)) }));
+
+  app.get<{ Params: { id: string } }>('/api/games/:id/pdn', async (req, reply) => {
+    const game = await getGame(req.params.id);
+    reply
+      .type('application/x-pdn; charset=utf-8')
+      .header('content-disposition', `attachment; filename="kabe-${game.id.slice(0, 8)}.pdn"`);
+    return toPdn(store.toRecord(game));
+  });
+
+  app.delete<{ Params: { id: string } }>('/api/games/:id', async (req, reply) => {
+    if (!(await store.delete(req.params.id))) throw new HttpError(404, 'Mängu ei leitud');
+    reply.status(204);
+    return null;
+  });
 
   app.post<{ Params: { id: string } }>('/api/games/:id/moves', async (req) => {
-    const game = getGame(req.params.id);
+    const game = await getGame(req.params.id);
     const { move: text } = parse(MoveBody, req.body);
     if (store.isOver(game)) throw new HttpError(409, 'Mäng on juba läbi');
     if (!store.canHumanMove(game)) throw new HttpError(409, 'Praegu on AI kord');
@@ -139,7 +185,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
   });
 
   app.post<{ Params: { id: string } }>('/api/games/:id/undo', async (req) => {
-    const game = getGame(req.params.id);
+    const game = await getGame(req.params.id);
     if (game.aiThinking) throw new HttpError(409, 'AI mõtleb, oota hetk');
     const undone = store.undo(game);
     if (undone === 0) throw new HttpError(409, 'Pole käiku, mida tagasi võtta');
@@ -147,7 +193,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
   });
 
   app.post<{ Params: { id: string } }>('/api/games/:id/hint', async (req) => {
-    const game = getGame(req.params.id);
+    const game = await getGame(req.params.id);
     const hint = suggestMove(game.position);
     return { hint: hint ? formatMove(hint.move) : null };
   });
