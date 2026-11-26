@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { createEngineOpponent, type Opponent } from '../../src/ai/opponent.js';
 import { applyMove, findMove, formatMove, initialPosition, legalMoves } from '../../src/game/rules.js';
@@ -31,7 +31,7 @@ describe('REST API', () => {
   it('GET /health', async () => {
     const res = await start().inject({ method: 'GET', url: '/health' });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ status: 'ok' });
+    expect(res.json()).toMatchObject({ status: 'ok', uptimeSeconds: 0 });
   });
 
   it('loob mängu AI vastu ja AI vastab inimese käigule', async () => {
@@ -105,6 +105,30 @@ describe('REST API', () => {
     await app.inject({ method: 'POST', url: `/api/games/${game.id}/moves`, payload: { move: 'c3-d4' } });
     const res = await app.inject({ method: 'POST', url: `/api/games/${game.id}/undo` });
     expect(res.json()).toMatchObject({ undone: 2, game: { history: [] } });
+  });
+});
+
+describe('laudade arv ja lõppenud mäng', () => {
+  it('lubab kuni 16 lauda', async () => {
+    start();
+    for (let i = 0; i < 16; i++) expect((await app.inject({ method: 'GET', url: `/api/board/b${i}` })).statusCode).toBe(200);
+    expect((await app.inject({ method: 'GET', url: '/api/board/b16' })).statusCode).toBe(429);
+    expect((await app.inject({ method: 'GET', url: '/api/board/b0' })).statusCode).toBe(200);
+  });
+
+  it('lõppenud mängus käiku ei tehta', async () => {
+    start();
+    const { game } = (await app.inject({ method: 'POST', url: '/api/games', payload: { opponent: 'none', clockMinutes: 1 } })).json();
+    await app.inject({ method: 'POST', url: `/api/games/${game.id}/moves`, payload: { move: 'c3-d4' } });
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.now() + 120_000);
+    try {
+      const res = await app.inject({ method: 'POST', url: `/api/games/${game.id}/moves`, payload: { move: 'f6-e5' } });
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error).toBe('Mäng on juba läbi');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

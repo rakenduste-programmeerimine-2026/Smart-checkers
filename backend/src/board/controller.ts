@@ -86,6 +86,8 @@ export class BoardController {
   private gameId: string | null = null;
   /** Mitu käiku mängu ajaloost on laual tehtud. */
   private boardPly = 0;
+  /** Mängu tagasivõttude arv, mida laud teab. */
+  private knownUndoCount = 0;
   /** Laud tuleb seada mängu praegusesse seisu (uus mäng või käigu tagasivõtt). */
   private needsSetup = false;
   private mask: number | null = null;
@@ -116,6 +118,7 @@ export class BoardController {
   attach(game: Game): void {
     this.gameId = game.id;
     this.boardPly = game.history.length;
+    this.knownUndoCount = game.undoCount;
     this.needsSetup = true;
     this.hint = null;
     this.message = null;
@@ -206,9 +209,10 @@ export class BoardController {
     if (this.replay || !game || this.mask === null || !this.stableFor(this.timing.settleMs)) return;
     const mask = this.mask;
 
-    if (this.boardPly > game.history.length) {
-      // Käik võeti mujal (äpis) tagasi.
+    if (this.boardPly > game.history.length || this.knownUndoCount !== game.undoCount) {
+      // Käik võeti mujal (äpis) tagasi: laud tuleb uude seisu seada.
       this.boardPly = game.history.length;
+      this.knownUndoCount = game.undoCount;
       this.needsSetup = true;
     }
 
@@ -298,6 +302,7 @@ export class BoardController {
       return;
     }
     this.boardPly = game.history.length;
+    this.knownUndoCount = game.undoCount;
     this.needsSetup = true;
     this.hint = null;
   }

@@ -33,6 +33,8 @@ export interface Game {
   /** AI arvutab praegu käiku. */
   aiThinking: boolean;
   lastAiMove: OpponentMove | null;
+  /** Mitu korda on käike tagasi võetud (laud saab nii teada, et seis muutus). */
+  undoCount: number;
   /** Male kell: kummagi järelejäänud aeg millisekundites. null = kellata mäng. */
   clock: GameClock | null;
 }
@@ -109,6 +111,7 @@ export class GameStore {
       createdAt: this.now().toISOString(),
       aiThinking: false,
       lastAiMove: null,
+      undoCount: 0,
     };
     this.remember(game);
     this.persist(game);
@@ -154,6 +157,7 @@ export class GameStore {
       createdAt: record.meta.startedAt,
       aiThinking: false,
       lastAiMove: null,
+      undoCount: 0,
       clock: newClock(settings.clockMs),
     };
     for (const { text, at } of record.moves) {
@@ -295,6 +299,7 @@ export class GameStore {
     game.positions.length = last + 1;
     game.position = game.positions[last]!;
     game.lastAiMove = null;
+    game.undoCount++;
     if (game.clock) game.clock.runningSince = last === 0 ? null : this.now().getTime();
     this.persist(game);
     return removed;

@@ -156,7 +156,8 @@ export function buildApp(options: AppOptions): FastifyInstance {
     return game;
   };
 
-  app.get('/health', async () => ({ status: 'ok' }));
+  const startedAt = Date.now();
+  app.get('/health', async () => ({ status: 'ok', uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000) }));
 
   app.post('/api/games', async (req, reply) => {
     const body = parse(CreateGameBody, req.body);
