@@ -42,6 +42,15 @@ export interface Game {
   ending: GameEnding | null;
   /** Kes pakkus viiki (kehtib kuni järgmise käiguni). */
   drawOffer: Color | null;
+  /** Edetabeli mängijad (id) värvi järgi. */
+  players: GamePlayers;
+  /** Lõpptulemus on edetabelisse kantud (mängu ei saa enam tagasi võtta). */
+  rated: boolean;
+}
+
+export interface GamePlayers {
+  white: string | null;
+  black: string | null;
 }
 
 export type GameEnding = { kind: 'resign'; by: Color } | { kind: 'agreement' };
@@ -66,6 +75,7 @@ export interface NewGameOptions {
   humanColor: Color;
   /** Male kella algaeg millisekundites (kummalegi poolele). */
   clockMs?: number | null;
+  players?: Partial<GamePlayers>;
 }
 
 export const MAX_CLOCK_MS = 3 * 60 * 60 * 1000;
@@ -76,6 +86,8 @@ export interface GameStoreOptions {
   /** Mitu mängu korraga mälus hoida (vanemad lõppenud mängud jäävad ainult kettale). */
   maxGames?: number;
   now?: () => Date;
+  /** Kutsutakse üks kord, kui mäng lõpeb (edetabel). */
+  onGameOver?: (game: Game, result: GameResult) => void | Promise<void>;
 }
 
 export const DEFAULT_MAX_GAMES = 500;
@@ -105,6 +117,7 @@ export class GameStore {
   private readonly records: RecordStore | undefined;
   private readonly maxGames: number;
   private readonly now: () => Date;
+  private readonly onGameOver: GameStoreOptions['onGameOver'];
 
   constructor(
     private readonly opponents: Record<OpponentKind, Opponent>,
@@ -114,14 +127,17 @@ export class GameStore {
     this.records = options.records;
     this.maxGames = options.maxGames ?? DEFAULT_MAX_GAMES;
     this.now = options.now ?? (() => new Date());
+    this.onGameOver = options.onGameOver;
   }
 
   create(options: NewGameOptions, id: string = randomUUID()): Game {
     const position = initialPosition();
-    const { clockMs, ...settings } = options;
+    const { clockMs, players, ...settings } = options;
     const game: Game = {
       id,
       ...settings,
+      players: { white: players?.white ?? null, black: players?.black ?? null },
+      rated: false,
       clock: newClock(clockMs),
       position,
       history: [],
@@ -183,6 +199,8 @@ export class GameStore {
       clock: newClock(settings.clockMs),
       ending: null,
       drawOffer: null,
+      players: { white: settings.players?.white ?? null, black: settings.players?.black ?? null },
+      rated: record.rated ?? false,
     };
     for (const { text, at } of record.moves) {
       const move = findMove(game.position, text);
@@ -387,7 +405,7 @@ export class GameStore {
    * Kahe inimese mängus võetakse tagasi üks käik. Tagastab tagasi võetud käikude arvu.
    */
   undo(game: Game): number {
-    if (game.aiThinking || game.ending) return 0;
+    if (game.aiThinking || game.ending || game.rated) return 0;
     const isHumanPly = (i: number) => !game.opponent || game.positions[i]?.turn === game.humanColor;
     let last = -1;
     for (let i = game.moves.length - 1; i >= 0; i--) {
@@ -422,6 +440,7 @@ export class GameStore {
         level: game.level,
         humanColor: game.humanColor,
         clockMs: game.clock?.initialMs ?? null,
+        players: game.players,
       },
       moves: game.history.map((text, i) => ({ text, at: game.moveTimes[i] ?? game.createdAt })),
       result,
@@ -430,6 +449,7 @@ export class GameStore {
     if (result.status !== 'ongoing' && lastTime) record.endedAt = lastTime;
     if (game.clock?.flagged) record.flagged = game.clock.flagged;
     if (game.ending) record.ending = game.ending;
+    if (game.rated) record.rated = true;
     return record;
   }
 
@@ -507,6 +527,22 @@ export class GameStore {
     };
   }
 
+  /** Kui mäng just lõppes, kannab tulemuse edetabelisse (üks kord). */
+  private finish(game: Game): void {
+    if (game.rated) return;
+    const result = this.result(game);
+    if (result.status === 'ongoing') return;
+    // Ainult mängijatega mängud lukustatakse; muidu saab lõppenud mängu ikka tagasi võtta.
+    if (!game.players.white && !game.players.black) return;
+    game.rated = true;
+    if (!this.onGameOver) return;
+    try {
+      Promise.resolve(this.onGameOver(game, result)).catch((error: unknown) => this.onError(error));
+    } catch (error) {
+      this.onError(error);
+    }
+  }
+
   private notify(game: Game): void {
     for (const listener of this.listeners.get(game.id) ?? []) {
       try {
@@ -519,6 +555,7 @@ export class GameStore {
 
   /** Salvestab mängu kettale; ühe mängu salvestused tehakse järjest. */
   private persist(game: Game): void {
+    this.finish(game);
     this.notify(game);
     const records = this.records;
     if (!records) return;

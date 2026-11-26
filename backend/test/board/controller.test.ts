@@ -149,6 +149,7 @@ describe('BoardController', () => {
     press(1);
     expect(press(1).lcd[0]).toBe('>Sina:valge     ');
     expect(press(2).lcd[0]).toBe('>Sina:must      ');
+    expect(press(1).lcd[0]).toBe('>Mangija:kulalin');
     expect(press(1).lcd[0]).toBe('>Kell:valjas    ');
     expect(press(2).lcd[0]).toBe('>Kell:5 min     ');
     expect(press(1).lcd[0]).toBe('>Kordus         ');
@@ -255,7 +256,7 @@ describe('BoardController', () => {
 
   it('menüüst saab alistuda', () => {
     const game = startGame({ opponent: 'engine', humanColor: 'white' });
-    expect(menuTo(7).lcd[0]).toBe('>Alistu         ');
+    expect(menuTo(8).lcd[0]).toBe('>Alistu         ');
     const end = press(2);
     expect(store.result(game)).toEqual({ status: 'win', winner: 'black', reason: 'resign' });
     expect(end.lcd).toEqual(['Must voitis!    ', 'Alistumine      ']);
@@ -263,7 +264,7 @@ describe('BoardController', () => {
 
   it('kahe inimese mängus on viik menüüst kohe kokkulepitud', () => {
     const game = startGame({ opponent: 'none' });
-    expect(menuTo(6).lcd[0]).toBe('>Paku viiki     ');
+    expect(menuTo(7).lcd[0]).toBe('>Paku viiki     ');
     const end = press(2);
     expect(store.result(game)).toEqual({ status: 'draw', reason: 'agreement' });
     expect(end.lcd).toEqual(['Viik!           ', 'Kokkuleppel     ']);
@@ -276,12 +277,12 @@ describe('BoardController', () => {
     game.positions = [game.position];
     board.attach(game);
     place(maskOf(game.position));
-    menuTo(6);
+    menuTo(7);
     expect(press(2).lcd).toEqual(['Viik            ', 'Vastane keeldus ']);
     expect(store.result(game).status).toBe('ongoing');
 
     board = new BoardController('laud2', store, { now: () => t, timing: { settleMs: 100, errorMs: 1000 } });
-    menuTo(7);
+    menuTo(8);
     expect(press(2).lcd[0]).toBe('Mang pole kaimas');
   });
 

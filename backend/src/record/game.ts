@@ -30,6 +30,8 @@ export interface RecordSettings {
   humanColor: 'white' | 'black';
   /** Male kella algaeg millisekundites, kui kell on kasutusel. */
   clockMs?: number | null;
+  /** Edetabeli mängijad (id) värvi järgi. */
+  players?: { white: string | null; black: string | null };
 }
 
 /** Salvestatav mängu kirje (JSON). */
@@ -45,6 +47,8 @@ export interface GameRecord {
   flagged?: 'white' | 'black';
   /** Alistumine või viigikokkulepe. */
   ending?: { kind: 'resign'; by: 'white' | 'black' } | { kind: 'agreement' };
+  /** Tulemus on edetabelisse kantud. */
+  rated?: boolean;
 }
 
 export interface GameOptions {
