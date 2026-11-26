@@ -92,6 +92,8 @@ export interface ClaudeOpponentOptions {
   fallback?: Opponent;
   /** Ühe päringu ajapiirang millisekundites. */
   timeoutMs?: number;
+  /** Mitu Claude päringut võib korraga käia; ülejäänud käigud teeb kohalik mootor. */
+  maxConcurrent?: number;
   onError?: (error: unknown) => void;
 }
 
@@ -99,6 +101,8 @@ export function createClaudeOpponent(options: ClaudeOpponentOptions = {}): Oppon
   const model = options.model ?? DEFAULT_CLAUDE_MODEL;
   const fallback = options.fallback ?? createEngineOpponent();
   const timeoutMs = options.timeoutMs ?? 30_000;
+  const maxConcurrent = options.maxConcurrent ?? 4;
+  let active = 0;
   let client = options.client;
 
   const useFallback = async (position: Position, level: AiLevel, reason: string): Promise<OpponentMove | null> => {
@@ -117,6 +121,8 @@ export function createClaudeOpponent(options: ClaudeOpponentOptions = {}): Oppon
         return { move: only, notation: formatMove(only), source: 'claude', reason: 'Ainus seaduslik käik.' };
       }
 
+      if (active >= maxConcurrent) return useFallback(position, level, 'AI on hõivatud');
+      active++;
       try {
         client ??= new Anthropic();
         const response = await client.beta.messages.parse(
@@ -145,6 +151,8 @@ export function createClaudeOpponent(options: ClaudeOpponentOptions = {}): Oppon
         if (error instanceof Anthropic.APIConnectionTimeoutError) return useFallback(position, level, 'AI API ei vastanud õigel ajal');
         if (error instanceof Anthropic.APIError) return useFallback(position, level, `AI API viga ${error.status ?? ''}`.trim());
         return useFallback(position, level, 'AI API pole kättesaadav');
+      } finally {
+        active--;
       }
     },
   };
