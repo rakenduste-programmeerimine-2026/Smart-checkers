@@ -15,6 +15,7 @@ import { toPdn } from '../record/pdn.js';
 import type { GameStore as RecordStore } from '../record/store.js';
 import { GameStore, type Game } from './games.js';
 import { HttpError, parse } from './http.js';
+import { registerSecurity, type SecurityOptions } from './security.js';
 
 export type { Game } from './games.js';
 
@@ -27,7 +28,14 @@ export interface AppOptions {
   records?: RecordStore;
   /** Mitu mängu mälus hoida. */
   maxGames?: number;
+  /** Ligipääsuvõtmed ja päringulimiit. */
+  security?: SecurityOptions;
+  /** Kas usaldada X-Forwarded-For päist (server on pöördproksi taga). */
+  trustProxy?: boolean;
 }
+
+/** Suurim lubatud päringu keha (PDN-i import on kuni 100 000 märki). */
+export const BODY_LIMIT = 256 * 1024;
 
 const Level = z.enum(['beginner', 'medium', 'strong']);
 const OpponentSchema = z.enum(['engine', 'claude', 'none']);
@@ -116,16 +124,30 @@ export function serializeAiMove(m: OpponentMove | null) {
 }
 
 export function buildApp(options: AppOptions): FastifyInstance {
-  const app = Fastify({ logger: options.logger ?? false });
+  const app = Fastify({
+    logger: options.logger ?? false,
+    bodyLimit: BODY_LIMIT,
+    maxParamLength: 128,
+    requestTimeout: 60_000,
+    trustProxy: options.trustProxy ?? false,
+  });
+  registerSecurity(app, options.security);
   const store = new GameStore(options.opponents, (error) => app.log.error({ err: error }, 'Mängu viga'), {
     records: options.records,
     maxGames: options.maxGames,
   });
   app.addHook('onClose', async () => store.flush());
 
-  app.setErrorHandler((error, _req, reply) => {
+  app.setErrorHandler((error: Error & { statusCode?: number }, req, reply) => {
     const status = error instanceof HttpError ? error.statusCode : (error.statusCode ?? 500);
-    reply.status(status).send({ error: status >= 500 ? 'Serveri viga' : error.message });
+    if (status >= 500) req.log.error({ err: error }, 'Serveri viga');
+    const message =
+      status >= 500 ? 'Serveri viga' : status === 413 ? 'Päring on liiga suur' : error.message;
+    reply.status(status).send({ error: message });
+  });
+
+  app.setNotFoundHandler((_req, reply) => {
+    reply.status(404).send({ error: 'Sellist teed pole' });
   });
 
   const getGame = async (id: string): Promise<Game> => {

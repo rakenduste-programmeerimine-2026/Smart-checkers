@@ -32,8 +32,24 @@ Vaja on Node 20 või uuemat.
 | `ANTHROPIC_API_KEY` | – | Claude API võti välise AI vastase jaoks. Ilma selleta mängib kohalik mootor. |
 | `AI_MODEL` | `claude-opus-5-5` | Claude mudel |
 | `DATA_DIR` | `data` | Kaust, kuhu mängud JSON-failidena salvestatakse |
+| `API_TOKEN` | – | Äpi ligipääsuvõti (vähemalt 16 märki) |
+| `BOARD_TOKEN` | – | Laua ligipääsuvõti (vähemalt 16 märki) |
+| `RATE_LIMIT_PER_MIN` | `300` | Tavaliste päringute limiit IP kohta minutis |
+| `AI_RATE_LIMIT_PER_MIN` | `30` | AI-d käivitavate päringute limiit IP kohta minutis |
+| `TRUST_PROXY` | – | `true`, kui server on pöördproksi taga (siis loetakse IP päisest `X-Forwarded-For`) |
 | `PORT` | `3000` | Serveri port |
 | `HOST` | `0.0.0.0` | Kuulatav aadress (laud ja telefon on samas võrgus) |
+
+## Turvalisus
+
+- **Ligipääsuvõtmed.** Kui `API_TOKEN` on seatud, peab äpp saatma päise `Authorization: Bearer <API_TOKEN>`. Laud saadab `Authorization: Bearer <BOARD_TOKEN>` ja selle võtmega pääseb ainult laua olekupäringule (`POST /api/board/:boardId/state`), mitte mängude haldusele. Võtmeid võrreldakse konstantse ajaga. Ilma võtmeteta on server avatud ja hoiatab selle eest käivitumisel. `/health` on alati avalik.
+- **Päringulimiit** IP kaupa minutiaknaga: tavalised päringud 300, laua olekupäringud 900 ja AI-d käivitavad päringud (uus mäng, käik, `/api/ai/move`) 30 minutis. Üle limiidi tuleb vastus 429 koos päisega `Retry-After`.
+- **Claude API kulu.** Korraga käib kuni 4 Claude päringut, ülejäänud käigud teeb kohalik mootor.
+- **Sisendi piirid.** Keha on kuni 256 KB, PDN kuni 100 000 märki, käikude nimekiri kuni 500 käiku, laua id kuni 32 märki ja korraga on kuni 16 lauda. Kõik kehad kontrollitakse zod skeemiga.
+- **Failid.** Mängu id kontrollitakse enne failiteeks tegemist, nii et `../` ei pääse andmekaustast välja. Fail kirjutatakse ajutisse faili ja nimetatakse siis ümber.
+- **Vead.** Serveri vigade (500) üksikasju kliendile ei näidata, need lähevad logisse. Vastustel on päised `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Content-Security-Policy`, `Referrer-Policy` ja `Cache-Control: no-store`.
+
+CORS päiseid server ei saada, sest äpp (Expo) ja laud ei ole brauserid.
 
 ## REST API
 

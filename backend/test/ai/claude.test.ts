@@ -105,4 +105,25 @@ describe('createClaudeOpponent', () => {
     expect(result?.source).toBe('engine');
     expect(legalMoves(initialPosition()).map((m) => m.from)).toContain(result!.move.from);
   });
+
+  it('kasutab varumootorit, kui liiga palju Claude päringuid käib korraga', async () => {
+    let release: (v: unknown) => void = () => {};
+    const { client } = fakeClient(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve({ stop_reason: 'end_turn', parsed_output: { moveIndex: 0, reason: 'x' } });
+        }),
+    );
+    const ai = createClaudeOpponent({ client, fallback, maxConcurrent: 1 });
+    const first = ai.chooseMove(initialPosition(), 'medium');
+    const second = await ai.chooseMove(initialPosition(), 'medium');
+    expect(second).toMatchObject({ source: 'engine', fallbackReason: 'AI on hõivatud' });
+    release(null);
+    expect((await first)?.source).toBe('claude');
+    // Pärast vastust on koht jälle vaba.
+    const third = ai.chooseMove(initialPosition(), 'medium');
+    release(null);
+    expect((await third)?.source).toBe('claude');
+  });
 });
+
