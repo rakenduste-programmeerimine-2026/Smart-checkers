@@ -129,6 +129,10 @@ Laud küsib serverilt umbes 5 korda sekundis. Kõik laua teed on kujul `/api/boa
 | `POST` | `/api/board/:boardId/attach` | `{ gameId }` | `{ board, display }` (seob äpis loodud mänguga) |
 | `POST` | `/api/board/:boardId/replay` | `{ gameId }` | `{ board, display }` (kordus laual: B1 tagasi, B2 edasi, B3 välja) |
 
+### Võrgumäng kahe laua vahel
+
+`POST /api/matches` kehaga `{ white: "laud1", black: "laud2", clockMinutes?: 5 }` seob kaks lauda ühe kahe inimese mänguga (201, `{ gameId, boards }`). Kumbki laud mängib ainult oma värviga: oma käik loetakse magnetitest, vastase käik süttib LED-idega (kollane algus, roheline lõpp) ja tuleb laual järele teha. LCD näitab "Sinu kord" või "Vastase kord" ning "Vastane eemal", kui teine laud pole 5 s ühendust võtnud (`board.match.peerOnline`). Menüüst saab pakkuda viiki (teisel laual "Vastane: viik? B2 jah B1 ei") ja alistuda. Võrgumängus tagasivõttu pole. Äpp saab mängu jälgida tavaliste mängu teede ja `/events` kaudu.
+
 Vastuses on `lcd` kaks 16-märgilist rida (täpitähed on asendatud, sest LCD neid ei oska), `leds` on nimekiri `{ square, led, color: "RRGGBB", mode: "solid" | "blink" | "pulse" }` ja `effect` on `none`, `idle` (hingav ootel valgus), `win-white`, `win-black` või `draw`. LED-id, mida nimekirjas pole, on kustus. `seq` muutub ainult siis, kui midagi muutub, nii et laud ei pea iga kord uuesti joonistama.
 
 Käik loetakse tehtuks, kui mask on 300 ms paigal. Vale seisu näidatakse alles siis, kui see püsib 2,5 s, et pooleli löömist veaks ei loetaks.

@@ -48,6 +48,13 @@ const NewGameBody = z.object({
 
 const PuzzleBody = z.object({ puzzleId: z.string().min(1).max(64) });
 
+const BoardId = z.string().regex(/^[A-Za-z0-9_-]{1,32}$/, 'lubatud on tähed, numbrid, - ja _');
+const MatchBody = z.object({
+  white: BoardId,
+  black: BoardId,
+  clockMinutes: z.number().int().min(0).max(180).default(0),
+});
+
 export function registerBoardRoutes(
   app: FastifyInstance,
   store: GameStore,
@@ -107,6 +114,22 @@ export function registerBoardRoutes(
     controller.startPuzzle(puzzle);
     reply.status(201);
     return view(controller);
+  });
+
+  /**
+   * Võrgumäng kahe laua vahel: mõlemad lauad seotakse sama mänguga, kumbki
+   * oma värviga. Ühe laua käik süttib teisel LED-idega.
+   */
+  app.post('/api/matches', async (req, reply) => {
+    const body = parse(MatchBody, req.body);
+    if (body.white === body.black) throw new HttpError(400, 'Valge ja must peavad olema erinevad lauad');
+    const white = board({ boardId: body.white });
+    const black = board({ boardId: body.black });
+    const game = store.create({ opponent: null, level: 'medium', humanColor: 'white', clockMs: body.clockMinutes * 60_000 });
+    white.joinMatch(game, 'white', body.black, () => boards.get(body.black));
+    black.joinMatch(game, 'black', body.white, () => boards.get(body.white));
+    reply.status(201);
+    return { gameId: game.id, boards: [white.status(), black.status()] };
   });
 
   /** Uus mäng laual (sama, mis menüüst "Uus mäng"). */
