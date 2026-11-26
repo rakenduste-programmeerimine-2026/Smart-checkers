@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto';
 import { applyMove, findMove, formatMove, gameResult, initialPosition } from '../game/rules.js';
 import { opponent as other, type Color, type GameResult, type Move, type Position } from '../game/types.js';
 import { evaluate, type AiLevel } from '../ai/engine.js';
+import { reviewGame, type GameReview } from '../analysis/review.js';
 import type { Opponent, OpponentKind, OpponentMove } from '../ai/opponent.js';
 import type { GameRecord } from '../record/game.js';
 import { gameFromPdn } from '../record/pdn.js';
@@ -89,12 +90,16 @@ const PLAYER_NAME: Record<OpponentKind, string> = { claude: 'Claude AI', engine:
 
 export type GameListener = (game: Game) => void;
 
+const reviewVersion = (game: Game) => `${game.history.length}:${game.undoCount}`;
+
 /** Ühe mängu kohta lubatud korraga jälgijaid (SSE ühendused). */
 export const MAX_LISTENERS_PER_GAME = 20;
 
 export class GameStore {
   private readonly games = new Map<string, Game>();
   private readonly listeners = new Map<string, Set<GameListener>>();
+  /** Mänguülevaated: võti on mängu id, `version` näitab, millise seisu kohta. */
+  private readonly reviews = new Map<string, { version: string; review: Promise<GameReview>; done?: GameReview }>();
   private readonly saving = new Map<string, Promise<void>>();
   private readonly loading = new Map<string, Promise<Game | undefined>>();
   private readonly records: RecordStore | undefined;
@@ -221,6 +226,7 @@ export class GameStore {
 
   async delete(id: string): Promise<boolean> {
     const inMemory = this.games.delete(id);
+    this.reviews.delete(id);
     await this.saving.get(id);
     const onDisk = this.records && /^[A-Za-z0-9_-]{1,64}$/.test(id) ? await this.records.delete(id) : false;
     return inMemory || onDisk;
@@ -455,6 +461,32 @@ export class GameStore {
     const candidates = [...this.games.values()].filter((g) => g.id !== game.id && !g.aiThinking);
     const victim = candidates.find((g) => this.isOver(g)) ?? candidates[0];
     if (victim) this.games.delete(victim.id);
+  }
+
+  /**
+   * Mänguülevaade (iga käigu hinnang ja vead). Tulemus jäetakse meelde, kuni
+   * mängus midagi muutub; samaaegsed päringud saavad sama arvutuse.
+   */
+  review(game: Game, timePerMoveMs?: number): Promise<GameReview> {
+    const version = reviewVersion(game);
+    const cached = this.reviews.get(game.id);
+    if (cached?.version === version) return cached.review;
+    const entry: { version: string; review: Promise<GameReview>; done?: GameReview } = {
+      version,
+      review: reviewGame(game.positions.slice(), game.moves.slice(), timePerMoveMs ? { timePerMoveMs } : {}),
+    };
+    entry.review.then(
+      (r) => (entry.done = r),
+      () => this.reviews.delete(game.id),
+    );
+    this.reviews.set(game.id, entry);
+    return entry.review;
+  }
+
+  /** Valmis mänguülevaade, kui see on olemas ja kehtib praeguse seisu kohta. */
+  cachedReview(game: Game): GameReview | null {
+    const cached = this.reviews.get(game.id);
+    return cached?.version === reviewVersion(game) ? (cached.done ?? null) : null;
   }
 
   /**

@@ -10,7 +10,7 @@
  *
  * Nupud: 1 = vihje, 2 = käigu tagasivõtt, 3 = menüü. Menüüs: 1 = järgmine, 2 = vali, 3 = välju.
  */
-import { finalSquare, formatMove, legalMoves } from '../game/rules.js';
+import { findMove as findMoveText, finalSquare, formatMove, legalMoves } from '../game/rules.js';
 import { detectMove, occupancyMask, squaresInMask } from '../game/sensors.js';
 import type { Square } from '../game/squares.js';
 import type { Color, DrawReason, Move, Position, WinReason } from '../game/types.js';
@@ -139,6 +139,8 @@ export class BoardController {
     this.replay = { gameId: game.id, ply: 0 };
     this.menuIndex = null;
     this.hint = null;
+    // Mänguülevaade arvutatakse taustal; kui valmis, näitab kordus vigu.
+    this.store.review(game).catch(() => {});
   }
 
   /** Alustab laualt uue mängu menüü seadetega. */
@@ -467,7 +469,18 @@ export class BoardController {
         result.status === 'win' ? (result.winner === 'white' ? 'Valge võitis' : 'Must võitis') : result.status === 'draw' ? 'Viik' : 'Pooleli';
       return { lines: [`Kordus ${total}/${total}`, text], leds: [] };
     }
-    return { lines: [`Kordus ${replay.ply + 1}/${total}`, formatMove(move)], leds: moveLeds(move) };
+    const header = `Kordus ${replay.ply + 1}/${total}`;
+    // Kui mänguülevaade on valmis, näidatakse vigu ja paremat käiku.
+    const reviewed = this.store.cachedReview(game)?.moves[replay.ply];
+    if (reviewed && (reviewed.classification === 'mistake' || reviewed.classification === 'blunder')) {
+      const better = findMoveText(game.positions[replay.ply]!, reviewed.best);
+      const label = reviewed.classification === 'blunder' ? 'Suur viga' : 'Viga';
+      return {
+        lines: [`${replay.ply + 1}/${total} ${formatMove(move)}`, `${label}! ${reviewed.best}`],
+        leds: [...moveLeds(move), ...(better ? [led(better.from, COLORS.hint), led(finalSquare(better), COLORS.hint, 'blink')] : [])],
+      };
+    }
+    return { lines: [header, formatMove(move)], leds: moveLeds(move) };
   }
 
   /** Käik, mis on mängus tehtud (AI või äpp), aga laual veel mitte. */
