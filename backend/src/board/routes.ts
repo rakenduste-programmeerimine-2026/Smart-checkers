@@ -85,6 +85,9 @@ export function registerBoardRoutes(
 
   app.get('/api/board/:boardId', async (req) => view(board(req.params)));
 
+  /** Laua tervis: ühenduse logi, katkestused ja värisevad reed-lülitid. */
+  app.get('/api/board/:boardId/health', async (req) => ({ health: board(req.params).healthReport() }));
+
   /** Seob laua äpis loodud mänguga. */
   app.post('/api/board/:boardId/attach', async (req) => {
     const controller = board(req.params);

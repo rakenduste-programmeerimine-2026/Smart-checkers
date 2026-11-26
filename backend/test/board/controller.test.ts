@@ -156,6 +156,7 @@ describe('BoardController', () => {
     expect(press(1).lcd[0]).toBe('>Kordus         ');
     expect(press(1).lcd[0]).toBe('>Paku viiki     ');
     expect(press(1).lcd[0]).toBe('>Alistu         ');
+    expect(press(1).lcd[0]).toBe('>Laua test      ');
     expect(press(1).lcd[0]).toBe('>Uus mang       ');
     press(2);
     const game = board.game!;
