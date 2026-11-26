@@ -3,3 +3,7 @@ export * from './game/types.js';
 export * from './game/rules.js';
 export * from './game/sensors.js';
 export * from './ai/engine.js';
+export * from './record/game.js';
+export * from './record/tracker.js';
+export * from './record/pdn.js';
+export * from './record/store.js';

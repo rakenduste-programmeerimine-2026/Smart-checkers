@@ -11,6 +11,7 @@ Nutika kabelaua mänguserver. Laud (Arduino UNO R4 WiFi, 32 reed-lülitit, LED-r
 - `src/ai/claude.ts`: AI vastane välise AI API (Claude) kaudu. Mudel saab laua seisu ja nummerdatud seaduslikud käigud ning valib neist ühe, nii et ebaseaduslikku käiku ta teha ei saa. Kui API ei vasta, käib kohalik mootor.
 - `src/server/`: REST API (Fastify) ja mängude haldus (`games.ts`: kõik seisud, käigu tagasivõtt, AI taustal).
 - `src/board/`: füüsilise laua ühendus. `controller.ts` tunneb maskist käigu ära ja otsustab, mida LED-id ja LCD näitavad, `display.ts` teeb LED-riba numeratsiooni ja LCD teksti.
+- `src/record/`: mängude salvestamine laua magnetite järgi. `Game` peab mängu logi (käik ja aeg, tagasivõtt), `BoardTracker` paneb käigu kirja alles siis, kui laua mask on püsinud (vaikimisi 300 ms), `toPdn` ja `gameFromPdn` teevad PDN-ekspordi ja -impordi (vene kabe, GameType 25) ning `GameStore` salvestab mängud JSON-failidena.
 
 ## Käivitamine
 
