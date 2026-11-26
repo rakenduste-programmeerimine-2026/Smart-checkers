@@ -17,6 +17,10 @@ import { DIRECTIONS, SQUARE_COUNT, parseSquare, rankOf, squareName, step, type S
 import { opponent, type Board, type Color, type GameResult, type Move, type Piece, type Position } from './types.js';
 
 export const DRAW_QUIET_KING_PLIES = 30;
+/** 3+ tammi ühe tammi vastu: 15 tugevama poole käiku = 30 poolkäiku. */
+export const DRAW_LONE_KING_PLIES = 30;
+/** Mitmendal kordusel on viik. */
+export const DRAW_REPETITIONS = 3;
 
 const forwardRank = (color: Color): number => (color === 'white' ? 1 : -1);
 const isLastRank = (sq: Square, color: Color): boolean => rankOf(sq) === (color === 'white' ? 7 : 0);
@@ -171,14 +175,53 @@ export function applyMove(position: Position, move: Move): Position {
     board,
     turn: opponent(position.turn),
     quietKingPlies: quiet ? position.quietKingPlies + 1 : 0,
+    loneKingPlies: isLoneKingEnding(board) ? (position.loneKingPlies ?? 0) + 1 : 0,
   };
 }
 
-export function gameResult(position: Position): GameResult {
+/** Kas ühel poolel on vähemalt 3 tammi (ja ainult tammid) ning teisel üks tamm. */
+export function isLoneKingEnding(board: Board): boolean {
+  const count = (color: 'white' | 'black') => {
+    let kings = 0;
+    let men = 0;
+    for (const p of board) if (p?.color === color) p.king ? kings++ : men++;
+    return { kings, men };
+  };
+  const w = count('white');
+  const b = count('black');
+  const lone = (x: typeof w) => x.kings === 1 && x.men === 0;
+  const strong = (x: typeof w) => x.kings >= 3 && x.men === 0;
+  return (lone(w) && strong(b)) || (lone(b) && strong(w));
+}
+
+/** Seisu võti korduste leidmiseks (laud ja käigul olev pool). */
+export function positionKey(position: Position): string {
+  let key = position.turn === 'white' ? 'w' : 'b';
+  for (const p of position.board) key += p ? (p.color === 'white' ? (p.king ? 'W' : 'w') : p.king ? 'B' : 'b') : '.';
+  return key;
+}
+
+/** Mitu korda viimane seis ajaloos esineb (sh viimane ise). */
+export function repetitionCount(history: readonly Position[]): number {
+  const last = history[history.length - 1];
+  if (!last) return 0;
+  const key = positionKey(last);
+  let count = 0;
+  for (const p of history) if (positionKey(p) === key) count++;
+  return count;
+}
+
+/**
+ * Mängu tulemus. `history` (seisud algusest kuni praeguseni, viimane = position)
+ * on vajalik ainult kolmekordse korduse tuvastamiseks.
+ */
+export function gameResult(position: Position, history?: readonly Position[]): GameResult {
   if (legalMoves(position).length === 0) {
     return { status: 'win', winner: opponent(position.turn), reason: 'no-moves' };
   }
   if (position.quietKingPlies >= DRAW_QUIET_KING_PLIES) return { status: 'draw', reason: 'king-moves' };
+  if ((position.loneKingPlies ?? 0) >= DRAW_LONE_KING_PLIES) return { status: 'draw', reason: 'lone-king' };
+  if (history && repetitionCount(history) >= DRAW_REPETITIONS) return { status: 'draw', reason: 'repetition' };
   return { status: 'ongoing' };
 }
 
