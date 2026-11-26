@@ -42,6 +42,8 @@ export interface BoardSettings {
   humanColor: Color;
   /** Male kell minutites, 0 = kellata. */
   clockMinutes: number;
+  /** Edetabeli mängija laua taga (arvuti vastu inimene, kahekesi valge). null = külaline. */
+  playerId: string | null;
 }
 
 /** Kui kaua pärast viimast päringut loetakse laud võrgus olevaks. */
@@ -62,8 +64,8 @@ export interface BoardStatus {
   lastSeenAt: string | null;
 }
 
-type MenuItem = 'new' | 'opponent' | 'level' | 'color' | 'clock' | 'replay' | 'draw' | 'resign';
-const MENU_ITEMS: MenuItem[] = ['new', 'opponent', 'level', 'color', 'clock', 'replay', 'draw', 'resign'];
+type MenuItem = 'new' | 'opponent' | 'level' | 'color' | 'player' | 'clock' | 'replay' | 'draw' | 'resign';
+const MENU_ITEMS: MenuItem[] = ['new', 'opponent', 'level', 'color', 'player', 'clock', 'replay', 'draw', 'resign'];
 
 const WIN_REASON: Record<WinReason, string> = { 'no-moves': 'B3 menüü', time: 'Aeg sai otsa', resign: 'Alistumine' };
 const DRAW_REASON: Record<DrawReason, string> = {
@@ -84,10 +86,13 @@ const maskHex = (mask: number) => `0x${(mask >>> 0).toString(16).padStart(8, '0'
 export interface BoardControllerOptions {
   timing?: Partial<BoardTiming>;
   now?: () => number;
+  /** Edetabeli mängijad menüü jaoks (parim eespool). */
+  players?: () => { id: string; name: string }[];
 }
 
 export class BoardController {
-  readonly settings: BoardSettings = { opponent: 'claude', level: 'medium', humanColor: 'white', clockMinutes: 0 };
+  readonly settings: BoardSettings = { opponent: 'claude', level: 'medium', humanColor: 'white', clockMinutes: 0, playerId: null };
+  private readonly players: () => { id: string; name: string }[];
   private readonly timing: BoardTiming;
   private readonly now: () => number;
 
@@ -116,6 +121,7 @@ export class BoardController {
   ) {
     this.timing = { ...DEFAULT_TIMING, ...options.timing };
     this.now = options.now ?? Date.now;
+    this.players = options.players ?? (() => []);
   }
 
   get game(): Game | null {
@@ -149,11 +155,17 @@ export class BoardController {
     if (settings.level) this.settings.level = settings.level;
     if (settings.humanColor) this.settings.humanColor = settings.humanColor;
     if (settings.clockMinutes !== undefined) this.settings.clockMinutes = settings.clockMinutes;
+    if (settings.playerId !== undefined) this.settings.playerId = settings.playerId;
+    const opponent = this.settings.opponent === 'none' ? null : this.settings.opponent;
+    // Kustutatud mängijat ei kasutata.
+    const playerId = this.players().some((p) => p.id === this.settings.playerId) ? this.settings.playerId : null;
+    const seat: Color = opponent ? this.settings.humanColor : 'white';
     const game = this.store.create({
-      opponent: this.settings.opponent === 'none' ? null : this.settings.opponent,
+      opponent,
       level: this.settings.level,
       humanColor: this.settings.humanColor,
       clockMs: this.settings.clockMinutes * 60_000,
+      players: { [seat]: playerId },
     });
     this.attach(game);
     return game;
@@ -363,6 +375,9 @@ export class BoardController {
       }
     } else if (item === 'opponent') {
       this.settings.opponent = next(OPPONENTS, this.settings.opponent);
+    } else if (item === 'player') {
+      const ids = [null, ...this.players().map((p) => p.id)];
+      this.settings.playerId = next(ids, ids.includes(this.settings.playerId) ? this.settings.playerId : null);
     } else if (item === 'clock') {
       this.settings.clockMinutes = next(CLOCK_MINUTES, this.settings.clockMinutes);
     } else if (item === 'level') {
@@ -526,6 +541,8 @@ export class BoardController {
             ? `Tase:${LEVEL_LABEL[this.settings.level]}`
             : item === 'color'
               ? `Sina:${this.settings.humanColor === 'white' ? 'valge' : 'must'}`
+              : item === 'player'
+                ? `Mängija:${this.players().find((p) => p.id === this.settings.playerId)?.name ?? 'külaline'}`
               : item === 'clock'
                 ? `Kell:${this.settings.clockMinutes === 0 ? 'väljas' : `${this.settings.clockMinutes} min`}`
                 : item === 'replay'

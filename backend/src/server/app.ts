@@ -12,6 +12,9 @@ import { KING_VALUE, MAN_VALUE, searchMoves, suggestMove } from '../ai/engine.js
 import type { Opponent, OpponentKind, OpponentMove } from '../ai/opponent.js';
 import { registerBoardRoutes, type BoardTimingOptions } from '../board/routes.js';
 import { toPdn } from '../record/pdn.js';
+import { ratedResults } from '../players/rating.js';
+import { registerPlayerRoutes } from '../players/routes.js';
+import { PlayerStore } from '../players/store.js';
 import type { GameStore as RecordStore } from '../record/store.js';
 import { GameStore, type Game } from './games.js';
 import { HttpError, parse } from './http.js';
@@ -32,6 +35,8 @@ export interface AppOptions {
   security?: SecurityOptions;
   /** Kas usaldada X-Forwarded-For päist (server on pöördproksi taga). */
   trustProxy?: boolean;
+  /** Mängijad ja edetabel (vaikimisi ainult mälus). */
+  players?: PlayerStore;
 }
 
 /** Suurim lubatud päringu keha (PDN-i import on kuni 100 000 märki). */
@@ -46,6 +51,10 @@ const CreateGameBody = z.object({
   humanColor: z.enum(['white', 'black']).default('white'),
   /** Male kell minutites kummalegi poolele, 0 = kellata. */
   clockMinutes: z.number().int().min(0).max(180).default(0),
+  /** Edetabeli mängijad: arvuti vastu ainult inimese värv. */
+  players: z
+    .object({ white: z.string().min(1).max(64).optional(), black: z.string().min(1).max(64).optional() })
+    .optional(),
 });
 
 const ListQuery = z.object({ limit: z.coerce.number().int().min(1).max(200).default(50) });
@@ -118,7 +127,14 @@ function serializeMove(move: Move) {
   };
 }
 
-export function serializeGame(game: Game, store: GameStore) {
+/** Mängija nimi ja reiting mängu vaates (players on valikuline, et vana kood töötaks). */
+function playerView(id: string | null, players?: PlayerStore) {
+  if (!id) return null;
+  const p = players?.peek(id);
+  return p ? { id, name: p.name, rating: p.rating } : { id, name: null, rating: null };
+}
+
+export function serializeGame(game: Game, store: GameStore, players?: PlayerStore) {
   const result: GameResult = store.result(game);
   const clock = game.clock
     ? {
@@ -144,6 +160,7 @@ export function serializeGame(game: Game, store: GameStore) {
     lastMove: lastMove ? serializeMove(lastMove) : null,
     aiThinking: game.aiThinking,
     drawOffer: game.drawOffer,
+    players: { white: playerView(game.players.white, players), black: playerView(game.players.black, players) },
     canUndo: !game.ending && !game.aiThinking && game.history.length > 0,
     result,
     ...serializePosition(game.position),
@@ -207,9 +224,12 @@ export function buildApp(options: AppOptions): FastifyInstance {
     trustProxy: options.trustProxy ?? false,
   });
   registerSecurity(app, options.security);
+  const players = options.players ?? new PlayerStore();
+  app.addHook('onReady', async () => players.ready());
   const store = new GameStore(options.opponents, (error) => app.log.error({ err: error }, 'Mängu viga'), {
     records: options.records,
     maxGames: options.maxGames,
+    onGameOver: (game, result) => players.record(ratedResults(game, result, players, new Date().toISOString())),
   });
   /** Avatud SSE ühendused, mis serveri sulgemisel lõpetatakse. */
   const streams = new Set<() => void>();
@@ -226,7 +246,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
     const message =
       status >= 500 ? 'Serveri viga' : status === 413 ? 'Päring on liiga suur' : error.message;
     if (error instanceof StaleError) {
-      reply.status(409).send({ error: message, stale: true, game: serializeGame(error.game, store) });
+      reply.status(409).send({ error: message, stale: true, game: serializeGame(error.game, store, players) });
       return;
     }
     reply.status(status).send({ error: message });
@@ -247,16 +267,24 @@ export function buildApp(options: AppOptions): FastifyInstance {
 
   app.post('/api/games', async (req, reply) => {
     const body = parse(CreateGameBody, req.body);
+    const opponent = body.opponent === 'none' ? null : body.opponent;
+    const chosen = { white: body.players?.white ?? null, black: body.players?.black ?? null };
+    if (opponent) chosen[body.humanColor === 'white' ? 'black' : 'white'] = null;
+    for (const id of [chosen.white, chosen.black]) {
+      if (id && !(await players.get(id))) throw new HttpError(404, 'Mängijat ei leitud');
+    }
+    if (chosen.white && chosen.white === chosen.black) throw new HttpError(400, 'Sama mängija ei saa mängida mõlema poolega');
     const game = store.create({
-      opponent: body.opponent === 'none' ? null : body.opponent,
+      opponent,
       level: body.level,
       humanColor: body.humanColor,
       clockMs: body.clockMinutes * 60_000,
+      players: chosen,
     });
     // Kui inimene on must, alustab AI.
     const aiMove = await store.aiTurn(game);
     reply.status(201);
-    return { game: serializeGame(game, store), aiMove: serializeAiMove(aiMove) };
+    return { game: serializeGame(game, store, players), aiMove: serializeAiMove(aiMove) };
   });
 
   app.get('/api/games', async (req) => {
@@ -274,7 +302,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
       throw new HttpError(422, `PDN-i ei saanud lugeda: ${(error as Error).message}`);
     }
     reply.status(201);
-    return { game: serializeGame(game, store) };
+    return { game: serializeGame(game, store, players) };
   });
 
   app.get<{ Params: { id: string } }>('/api/games/:id', async (req) => ({ game: serializeGame(await getGame(req.params.id), store) }));
@@ -301,7 +329,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
       const before = game.positions[expectedPly];
       const previous = before ? findMove(before, text) : null;
       if (previous && game.history[expectedPly] === formatMove(previous)) {
-        return { game: serializeGame(game, store), aiMove: serializeAiMove(game.lastAiMove), duplicate: true };
+        return { game: serializeGame(game, store, players), aiMove: serializeAiMove(game.lastAiMove), duplicate: true };
       }
       throw new StaleError(game);
     }
@@ -311,7 +339,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
     if (!move) throw new HttpError(422, `Käik "${text}" pole seaduslik või pole üheselt mõistetav`);
     store.play(game, move);
     const aiMove = await store.aiTurn(game);
-    return { game: serializeGame(game, store), aiMove: serializeAiMove(aiMove) };
+    return { game: serializeGame(game, store, players), aiMove: serializeAiMove(aiMove) };
   });
 
   app.post<{ Params: { id: string } }>('/api/games/:id/undo', async (req) => {
@@ -322,7 +350,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
     if (game.ending) throw new HttpError(409, 'Mäng on läbi');
     const undone = store.undo(game);
     if (undone === 0) throw new HttpError(409, 'Pole käiku, mida tagasi võtta');
-    return { game: serializeGame(game, store), undone };
+    return { game: serializeGame(game, store, players), undone };
   });
 
   app.post<{ Params: { id: string } }>('/api/games/:id/hint', async (req) => {
@@ -337,7 +365,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
     const game = await getGame(req.params.id);
     const { color } = parse(ResignBody, req.body ?? {});
     if (!store.resign(game, store.actor(game, color))) throw new HttpError(409, 'Mäng on juba läbi');
-    return { game: serializeGame(game, store) };
+    return { game: serializeGame(game, store, players) };
   });
 
   /**
@@ -350,11 +378,11 @@ export function buildApp(options: AppOptions): FastifyInstance {
     const actor = store.actor(game, color);
     if (action === 'decline') {
       if (!store.declineDraw(game, actor)) throw new HttpError(409, 'Viigipakkumist pole');
-      return { status: 'declined', game: serializeGame(game, store) };
+      return { status: 'declined', game: serializeGame(game, store, players) };
     }
     const status = store.offerDraw(game, actor);
     if (status === 'over') throw new HttpError(409, 'Mäng on juba läbi');
-    return { status, game: serializeGame(game, store) };
+    return { status, game: serializeGame(game, store, players) };
   });
 
   /**
@@ -381,7 +409,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
   app.get<{ Params: { id: string } }>('/api/games/:id/events', async (req, reply) => {
     const game = await getGame(req.params.id);
     const send = (g: Game) => {
-      const data = JSON.stringify({ game: serializeGame(g, store), aiMove: serializeAiMove(g.lastAiMove) });
+      const data = JSON.stringify({ game: serializeGame(g, store, players), aiMove: serializeAiMove(g.lastAiMove) });
       reply.raw.write(`event: game\nid: ${g.history.length}\ndata: ${data}\n\n`);
     };
     const unsubscribe = store.subscribe(game.id, send);
@@ -421,7 +449,8 @@ export function buildApp(options: AppOptions): FastifyInstance {
     return { position: serializePosition(position), aiMove: serializeAiMove(choice) };
   });
 
-  registerBoardRoutes(app, store, options.board);
+  registerPlayerRoutes(app, players);
+  registerBoardRoutes(app, store, { ...options.board, players: () => players.current() });
 
   return app;
 }

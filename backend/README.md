@@ -86,6 +86,18 @@ Kõik vastused on JSON-is. Vead tulevad kujul `{ "error": "..." }` ja koodiga 40
 
 `aiMove` sisaldab välju `move`, `from`, `path`, `captures`, `promotes`, `source` (`claude` või `engine`), `reason` (AI põhjendus) ja `fallbackReason` (miks kohalik mootor välise AI asemel käis).
 
+### Mängijad ja edetabel
+
+| Meetod | Tee | Keha | Vastus |
+| --- | --- | --- | --- |
+| `POST` | `/api/players` | `{ name: "Maik" }` | `{ player }` (201; nimi 1–24 märki, unikaalne) |
+| `GET` | `/api/players?limit=50` | – | `{ players: [{ rank, id, name, rating, bestRating, title, stats }] }` (edetabel) |
+| `GET` | `/api/players/:id` | – | `{ player }` koos reitingu ajalooga (`history`, viimased 50) |
+| `PATCH` | `/api/players/:id` | `{ name }` | `{ player }` |
+| `DELETE` | `/api/players/:id` | – | 204 |
+
+Mängu loomisel saab mängijad siduda: `POST /api/games` kehas `players: { white?: id, black?: id }` (arvuti vastu loeb ainult inimese värv). Kui mäng lõpeb, uuendatakse reitingut üks kord (Elo, algus 1200, esimesed 10 mängu K = 40, edasi K = 24). Arvuti vastastel on püsireiting: arvuti 800/1200/1600, Claude 1000/1400/1700 (algaja/keskmine/tugev). Kahe inimese mängus muutub reiting, kui mõlemad on mängijad. Tiitlid: Algaja (< 1100), Harrastaja, Edasijõudnu (1300+), Ekspert (1500+), Meister (1800+). `stats` sisaldab võite, kaotusi, viike, seeriat (`streak`, + võidud, − kaotused) ja tulemusi vastase kaupa (`byOpponent`). Edetabelisse kantud mängu ei saa tagasi võtta. Laua menüüs valib "Mängija" edetabelist, kes laua taga mängib. Mängijad salvestatakse faili `DATA_DIR/players.data`.
+
 Näide:
 
 ```bash
@@ -132,7 +144,7 @@ LED-riba on üks 160 LED-iga tükk, mis käib ridade kaupa edasi-tagasi: `a1 →
 | B2 | Võta käik tagasi (ilma mänguta: uus mäng) | Vali või muuda |
 | B3 | Ava menüü | Sulge menüü |
 
-Menüüs on uus mäng, vastane (Claude, arvuti, inimene), raskusaste, sinu värv, male kell (väljas, 5, 10, 15 või 30 minutit), praeguse mängu kordus, viigipakkumine ja alistumine. Kahe inimese mängus laua taga kehtib viik menüüst kohe; arvuti vastu otsustab AI. Mängu lõpus näitab LCD teisel real põhjust (näiteks "Seis kordus 3x" või "Alistumine").
+Menüüs on uus mäng, vastane (Claude, arvuti, inimene), raskusaste, sinu värv, mängija (edetabelist või külaline), male kell (väljas, 5, 10, 15 või 30 minutit), praeguse mängu kordus, viigipakkumine ja alistumine. Kahe inimese mängus laua taga kehtib viik menüüst kohe; arvuti vastu otsustab AI. Mängu lõpus näitab LCD teisel real põhjust (näiteks "Seis kordus 3x" või "Alistumine").
 
 Kellaga mängus näitab LCD teisel real mõlema poole aega (`V 4:32    M 5:00`). Kell käivitub esimese käiguga ja kui aeg saab otsa, võidab vastane. Kui Claude API ei vasta ja käib kohalik mootor, kuvab LCD "Claude ei vasta / Käis arvuti". `GET /api/board/:boardId` näitab väljadega `online` ja `lastSeenAt`, kas laud on võrgus. Pärast uut mängu või tagasivõttu näitavad LED-id, kuhu nupp panna ja kust ära võtta, kuni laud on õiges seisus. Tammiks saamisel kuvab LCD "Tamm! Pane kroon peale".
 

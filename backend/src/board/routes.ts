@@ -41,6 +41,8 @@ const NewGameBody = z.object({
   level: z.enum(['beginner', 'medium', 'strong']).optional(),
   humanColor: z.enum(['white', 'black']).optional(),
   clockMinutes: z.number().int().min(0).max(180).optional(),
+  /** Edetabeli mängija laua taga, null = külaline. */
+  playerId: z.string().min(1).max(64).nullable().optional(),
 });
 
 export function registerBoardRoutes(app: FastifyInstance, store: GameStore, options: BoardControllerOptions = {}): void {

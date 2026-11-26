@@ -15,6 +15,8 @@
  */
 import { createClaudeOpponent, DEFAULT_CLAUDE_MODEL } from '../ai/claude.js';
 import { createEngineOpponent } from '../ai/opponent.js';
+import { join } from 'node:path';
+import { PlayerStore } from '../players/store.js';
 import { GameStore as RecordStore } from '../record/store.js';
 import { buildApp } from './app.js';
 import { DEFAULT_RATE_LIMIT } from './security.js';
@@ -26,9 +28,12 @@ const positiveInt = (value: string | undefined, fallback: number): number => {
 };
 
 const engine = createEngineOpponent();
+const dataDir = env.DATA_DIR || 'data';
 const app = buildApp({
   logger: true,
-  records: new RecordStore(env.DATA_DIR || 'data'),
+  records: new RecordStore(dataDir),
+  // Laiend pole .json, et mängude nimekiri seda mänguks ei peaks.
+  players: new PlayerStore(join(dataDir, 'players.data')),
   trustProxy: env.TRUST_PROXY === 'true',
   security: {
     apiToken: env.API_TOKEN || undefined,
