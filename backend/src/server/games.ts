@@ -233,6 +233,13 @@ export class GameStore {
     return game;
   }
 
+  /** Kas mängus saab praegu käiku tagasi võtta (sama kontroll, mis `undo`). */
+  canUndo(game: Game): boolean {
+    if (game.aiThinking || game.ending || game.rated || game.puzzle) return false;
+    const isHumanPly = (i: number) => !game.opponent || game.positions[i]?.turn === game.humanColor;
+    return game.moves.some((_, i) => isHumanPly(i));
+  }
+
   /** Impordib PDN-teksti kahe inimese mänguks. Viskab vea, kui mõni käik pole seaduslik. */
   importPdn(text: string): Game {
     const parsed = gameFromPdn(text).toRecord();
@@ -468,6 +475,7 @@ export class GameStore {
     game.positions.length = last + 1;
     game.position = game.positions[last]!;
     game.lastAiMove = null;
+    game.drawOffer = null;
     game.undoCount++;
     if (game.clock) game.clock.runningSince = last === 0 ? null : this.now().getTime();
     this.persist(game);

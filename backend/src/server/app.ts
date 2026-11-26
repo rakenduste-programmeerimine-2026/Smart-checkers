@@ -189,9 +189,11 @@ export function serializeGame(game: Game, store: GameStore, players?: PlayerStor
           solution: game.puzzle.solution,
         }
       : null,
-    canUndo: !game.ending && !game.aiThinking && game.history.length > 0,
+    canUndo: store.canUndo(game),
     result,
     ...serializePosition(game.position),
+    // Lõppenud mängus (alistumine, viik, aeg) ei saa enam käike teha.
+    ...(result.status === 'ongoing' ? {} : { legalMoves: [] }),
   };
 }
 
@@ -337,7 +339,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
     return { game: serializeGame(game, store, players) };
   });
 
-  app.get<{ Params: { id: string } }>('/api/games/:id', async (req) => ({ game: serializeGame(await getGame(req.params.id), store) }));
+  app.get<{ Params: { id: string } }>('/api/games/:id', async (req) => ({ game: serializeGame(await getGame(req.params.id), store, players) }));
 
   app.get<{ Params: { id: string } }>('/api/games/:id/pdn', async (req, reply) => {
     const game = await getGame(req.params.id);

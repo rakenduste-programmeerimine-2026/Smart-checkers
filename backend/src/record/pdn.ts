@@ -4,7 +4,7 @@
  * Vene kabe on PDN-is GameType 25. Käigud on kujul "c3-d4" ja löömised "c3:e5:g7".
  */
 import { parsePositionKey } from '../game/rules.js';
-import { squareName } from '../game/squares.js';
+import { parseSquare, squareName, SQUARE_COUNT } from '../game/squares.js';
 import type { GameResult, Position } from '../game/types.js';
 import { Game, type GameRecord } from './game.js';
 
@@ -28,6 +28,29 @@ export function toFen(position: Position): string {
   const side = (color: 'white' | 'black') =>
     position.board.flatMap((p, sq) => (p?.color === color ? [`${p.king ? 'K' : ''}${squareName(sq)}`] : [])).join(',');
   return `${position.turn === 'white' ? 'W' : 'B'}:W${side('white')}:B${side('black')}`;
+}
+
+/**
+ * Loeb PDN FEN-i ("W:Wc3,Ka1:Bh8"). Toetatud on tähtruudud; numbrilised ruudud
+ * (rahvusvahelise kabe kujul) annavad vea.
+ */
+export function parseFen(fen: string): Position {
+  const parts = fen.trim().replace(/\.$/, '').split(':');
+  const turn = parts[0]?.toUpperCase();
+  if (turn !== 'W' && turn !== 'B') throw new Error('FEN peab algama W või B');
+  const board: Position['board'][number][] = Array.from({ length: SQUARE_COUNT }, () => null);
+  for (const part of parts.slice(1)) {
+    const color = part[0]?.toUpperCase() === 'W' ? 'white' : part[0]?.toUpperCase() === 'B' ? 'black' : null;
+    if (!color) throw new Error(`Vigane FEN osa: ${part}`);
+    for (const item of part.slice(1).split(',').filter(Boolean)) {
+      const king = /^k/i.test(item);
+      const sq = parseSquare(item.replace(/^k/i, '').toLowerCase());
+      if (sq === null) throw new Error(`Vigane FEN ruut: ${item}`);
+      if (board[sq]) throw new Error(`FEN-is on ruut ${item} kaks korda`);
+      board[sq] = { color, king };
+    }
+  }
+  return { board, turn: turn === 'W' ? 'white' : 'black', quietKingPlies: 0 };
 }
 
 export function toPdn(record: GameRecord): string {
@@ -145,7 +168,8 @@ export function gameFromPdn(text: string, id?: string): Game {
   if (black) meta.black = black;
   if (parsed.headers.Event) meta.event = parsed.headers.Event;
   if (startedAt) meta.startedAt = startedAt;
-  const game = new Game(id ? { id, meta } : { meta });
+  const start = parsed.headers.FEN ? parseFen(parsed.headers.FEN) : undefined;
+  const game = new Game({ ...(id ? { id } : {}), meta, ...(start ? { start } : {}) });
   for (const move of parsed.moves) game.play(move, startedAt ? new Date(startedAt) : undefined);
   return game;
 }
