@@ -63,6 +63,8 @@ export interface BoardStatus {
   /** Kas laud on viimase 5 sekundi jooksul ühendust võtnud. */
   online: boolean;
   lastSeenAt: string | null;
+  /** Võrgumäng teise lauaga: selle laua värv ja vastase laud. */
+  match: { seat: Color; peerId: string; peerOnline: boolean } | null;
 }
 
 type MenuItem = 'new' | 'opponent' | 'level' | 'color' | 'player' | 'clock' | 'puzzle' | 'replay' | 'draw' | 'resign';
@@ -97,6 +99,8 @@ export class BoardController {
   readonly settings: BoardSettings = { opponent: 'claude', level: 'medium', humanColor: 'white', clockMinutes: 0, playerId: null };
   private readonly players: () => { id: string; name: string }[];
   private readonly puzzles: Pick<PuzzleLibrary, 'next'> | undefined;
+  /** Võrgumängus selle laua värv ja vastase laud. */
+  private match: { seat: Color; peerId: string; peer: () => BoardController | undefined } | null = null;
   /** Viimati laual alustatud ülesanne (menüü valib järgmise). */
   private lastPuzzleId: string | null = null;
   private readonly timing: BoardTiming;
@@ -153,6 +157,16 @@ export class BoardController {
     this.message = null;
     this.menuIndex = null;
     this.replay = null;
+    this.match = null;
+  }
+
+  /**
+   * Võrgumäng: laud mängib ainult ühe värviga. Vastase käigud (teiselt laualt)
+   * näidatakse LED-idega nagu AI käigud ja tuleb laual järele teha.
+   */
+  joinMatch(game: Game, seat: Color, peerId: string, peer: () => BoardController | undefined): void {
+    this.attach(game);
+    this.match = { seat, peerId, peer };
   }
 
   /** Mängib mängu laual käik-käigult läbi (B1 tagasi, B2 edasi, B3 välja). */
@@ -212,9 +226,18 @@ export class BoardController {
       boardPly: this.boardPly,
       state: this.state(),
       settings: { ...this.settings },
-      online: this.lastSeen !== null && this.now() - this.lastSeen < ONLINE_MS,
+      online: this.isOnline(),
       lastSeenAt: this.lastSeen === null ? null : new Date(this.lastSeen).toISOString(),
+      match: this.match ? { seat: this.match.seat, peerId: this.match.peerId, peerOnline: this.peerOnline() } : null,
     };
+  }
+
+  isOnline(): boolean {
+    return this.lastSeen !== null && this.now() - this.lastSeen < ONLINE_MS;
+  }
+
+  private peerOnline(): boolean {
+    return this.match?.peer()?.isOnline() ?? false;
   }
 
   // --- olek ---
@@ -287,6 +310,8 @@ export class BoardController {
       return;
     }
     if (!this.store.canHumanMove(game)) return;
+    // Võrgumängus ei loeta vastase poole käike sellelt laualt.
+    if (this.match && game.position.turn !== this.match.seat) return;
     const detection = detectMove(game.position, mask);
     if (detection.kind !== 'move') return;
     this.store.play(game, detection.move);
@@ -316,6 +341,13 @@ export class BoardController {
       if (button === 2) this.newGame();
       return;
     }
+    const seat = this.match?.seat;
+    if (seat && game.drawOffer === (seat === 'white' ? 'black' : 'white') && !this.store.isOver(game)) {
+      // Vastane pakkus viiki: B2 võtab vastu, B1 keeldub.
+      if (button === 2) this.store.offerDraw(game, seat);
+      if (button === 1) this.store.declineDraw(game, seat);
+      return;
+    }
     if (button === 1) this.showHint(game);
     if (button === 2) this.undo(game);
   }
@@ -334,6 +366,10 @@ export class BoardController {
   }
 
   private undo(game: Game): void {
+    if (this.match) {
+      this.flash(['Võrgumängus', 'tagasivõttu pole']);
+      return;
+    }
     if (game.aiThinking) {
       this.flash(['Oota hetk', 'AI mõtleb...']);
       return;
@@ -390,7 +426,9 @@ export class BoardController {
       if (!game || this.store.isOver(game)) {
         this.flash(['Mäng pole käimas', 'B3 menüü']);
       } else if (item === 'resign') {
-        this.store.resign(game, this.store.actor(game));
+        this.store.resign(game, this.match?.seat ?? this.store.actor(game));
+      } else if (this.match) {
+        if (this.store.offerDraw(game, this.match.seat) === 'pending') this.flash(['Viik pakutud', 'Ootan vastast']);
       } else if (!game.opponent) {
         // Mõlemad mängijad on laua taga: viik kehtib kohe.
         this.store.agreeDraw(game);
@@ -479,7 +517,16 @@ export class BoardController {
       return { lines: ['AI mõtleb...', counts], leds };
     }
 
-    const turn = turnLine(game);
+    const seat = this.match?.seat;
+    if (seat) {
+      if (game.drawOffer && game.drawOffer !== seat) return { lines: ['Vastane: viik?', 'B2 jah   B1 ei'], leds: [] };
+      if (position.turn !== seat) {
+        const leds = mask !== expected && this.stableFor(this.timing.errorMs) ? errorLeds(expected, mask) : [];
+        return { lines: ['Vastase kord', this.peerOnline() ? counts : 'Vastane eemal'], leds };
+      }
+    }
+
+    const turn = seat ? 'Sinu kord' : turnLine(game);
     const moves = legalMoves(position);
     if (mask !== expected) {
       const { missing, extra } = diff(expected, mask);
