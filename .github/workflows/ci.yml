@@ -22,3 +22,19 @@ jobs:
       - run: npm run typecheck
       - run: npm run test:coverage
       - run: npm run build
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ehita konteiner
+        run: docker build -t smart-checkers backend
+      - name: Käivita ja kontrolli /health
+        run: |
+          docker run -d --name kabe -p 3000:3000 smart-checkers
+          for i in $(seq 1 30); do
+            if curl -fsS localhost:3000/health; then exit 0; fi
+            sleep 1
+          done
+          docker logs kabe
+          exit 1

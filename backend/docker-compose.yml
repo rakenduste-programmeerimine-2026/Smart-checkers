@@ -1,0 +1,17 @@
+# Server koos andmekaustaga: docker compose up -d
+# Võtmed pane faili .env (API_TOKEN, BOARD_TOKEN, ANTHROPIC_API_KEY), seda faili gitti ei panda.
+services:
+  server:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      API_TOKEN: ${API_TOKEN:-}
+      BOARD_TOKEN: ${BOARD_TOKEN:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      AI_MODEL: ${AI_MODEL:-}
+    volumes:
+      - kabe-data:/data
+    restart: unless-stopped
+volumes:
+  kabe-data:
