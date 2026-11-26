@@ -43,6 +43,8 @@ export interface GameRecord {
   endedAt?: string;
   /** Kelle kell sai otsa (kui mäng lõppes aja tõttu). */
   flagged?: 'white' | 'black';
+  /** Alistumine või viigikokkulepe. */
+  ending?: { kind: 'resign'; by: 'white' | 'black' } | { kind: 'agreement' };
 }
 
 export interface GameOptions {
@@ -76,7 +78,7 @@ export class Game {
   }
 
   result(): GameResult {
-    return gameResult(this.position);
+    return gameResult(this.position, this.positions);
   }
 
   /** Teeb käigu. Viskab vea, kui käik pole seaduslik või mäng on läbi. */

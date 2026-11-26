@@ -15,6 +15,12 @@ export interface Position {
   turn: Color;
   /** Järjestikused tammikäigud ilma löömise ja lihtnupu käiguta (viigireegli jaoks). */
   quietKingPlies: number;
+  /**
+   * Järjestikused käigud seisus, kus ühel poolel on vähemalt 3 tammi ja teisel
+   * ainult üks tamm (vene kabe: tugevam pool peab võitma 15 käiguga).
+   * Puudumine tähendab 0.
+   */
+  loneKingPlies?: number;
 }
 
 export interface Move {
@@ -29,9 +35,16 @@ export interface Move {
 
 export type GameResult =
   | { status: 'ongoing' }
-  /** no-moves = vastasel pole käike, time = vastase kell sai otsa. */
-  | { status: 'win'; winner: Color; reason: 'no-moves' | 'time' }
-  | { status: 'draw'; reason: 'king-moves' };
+  /** no-moves = vastasel pole käike, time = vastase kell sai otsa, resign = vastane alistus. */
+  | { status: 'win'; winner: Color; reason: WinReason }
+  | { status: 'draw'; reason: DrawReason };
+
+export type WinReason = 'no-moves' | 'time' | 'resign';
+/**
+ * king-moves = 30 tammikäiku ilma löömiseta, repetition = sama seis kolmandat korda,
+ * lone-king = 3+ tammi ei võitnud üksikut tammi 15 käiguga, agreement = kokkulepe.
+ */
+export type DrawReason = 'king-moves' | 'repetition' | 'lone-king' | 'agreement';
 
 export function opponent(color: Color): Color {
   return color === 'white' ? 'black' : 'white';

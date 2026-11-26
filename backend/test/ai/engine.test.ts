@@ -50,10 +50,10 @@ describe('chooseMove', () => {
     expect(choice.score).toBeGreaterThan(0);
   });
 
-  it('on keskmisel ja tugeval tasemel deterministlik', () => {
+  it('on keskmisel ja tugeval tasemel deterministlik (ilma ajapiiranguta)', () => {
     const pos = applyMove(initialPosition(), legalMoves(initialPosition())[0]!);
     for (const level of ['medium', 'strong'] as const) {
-      expect(formatMove(chooseMove(pos, { level })!.move)).toBe(formatMove(chooseMove(pos, { level })!.move));
+      expect(formatMove(chooseMove(pos, { level, timeMs: 60_000 })!.move)).toBe(formatMove(chooseMove(pos, { level, timeMs: 60_000 })!.move));
     }
   });
 
