@@ -9,7 +9,7 @@
 import { randomUUID } from 'node:crypto';
 import { applyMove, findMove, formatMove, gameResult, initialPosition } from '../game/rules.js';
 import { opponent as other, type Color, type GameResult, type Move, type Position } from '../game/types.js';
-import type { AiLevel } from '../ai/engine.js';
+import { evaluate, type AiLevel } from '../ai/engine.js';
 import type { Opponent, OpponentKind, OpponentMove } from '../ai/opponent.js';
 import type { GameRecord } from '../record/game.js';
 import { gameFromPdn } from '../record/pdn.js';
@@ -37,7 +37,16 @@ export interface Game {
   undoCount: number;
   /** Male kell: kummagi järelejäänud aeg millisekundites. null = kellata mäng. */
   clock: GameClock | null;
+  /** Mäng lõppes alistumise või viigikokkuleppega. */
+  ending: GameEnding | null;
+  /** Kes pakkus viiki (kehtib kuni järgmise käiguni). */
+  drawOffer: Color | null;
 }
+
+export type GameEnding = { kind: 'resign'; by: Color } | { kind: 'agreement' };
+
+/** AI nõustub viigiga, kui seis on tema jaoks umbes võrdne või halvem. */
+export const AI_DRAW_ACCEPT_SCORE = 50;
 
 export interface GameClock {
   /** Algaeg millisekundites. */
@@ -78,8 +87,14 @@ function newClock(ms: number | null | undefined): GameClock | null {
 
 const PLAYER_NAME: Record<OpponentKind, string> = { claude: 'Claude AI', engine: 'Arvuti' };
 
+export type GameListener = (game: Game) => void;
+
+/** Ühe mängu kohta lubatud korraga jälgijaid (SSE ühendused). */
+export const MAX_LISTENERS_PER_GAME = 20;
+
 export class GameStore {
   private readonly games = new Map<string, Game>();
+  private readonly listeners = new Map<string, Set<GameListener>>();
   private readonly saving = new Map<string, Promise<void>>();
   private readonly loading = new Map<string, Promise<Game | undefined>>();
   private readonly records: RecordStore | undefined;
@@ -112,6 +127,8 @@ export class GameStore {
       aiThinking: false,
       lastAiMove: null,
       undoCount: 0,
+      ending: null,
+      drawOffer: null,
     };
     this.remember(game);
     this.persist(game);
@@ -159,6 +176,8 @@ export class GameStore {
       lastAiMove: null,
       undoCount: 0,
       clock: newClock(settings.clockMs),
+      ending: null,
+      drawOffer: null,
     };
     for (const { text, at } of record.moves) {
       const move = findMove(game.position, text);
@@ -170,6 +189,7 @@ export class GameStore {
       game.clock[record.flagged] = 0;
       game.clock.runningSince = null;
     }
+    if (record.ending) game.ending = record.ending;
     this.remember(game);
     return game;
   }
@@ -212,6 +232,9 @@ export class GameStore {
   }
 
   result(game: Game): GameResult {
+    const ending = game.ending;
+    if (ending?.kind === 'resign') return { status: 'win', winner: other(ending.by), reason: 'resign' };
+    if (ending?.kind === 'agreement') return { status: 'draw', reason: 'agreement' };
     const clock = game.clock;
     if (clock) {
       if (!clock.flagged && gameResult(game.position).status === 'ongoing' && this.remaining(game, game.position.turn) <= 0) {
@@ -223,7 +246,77 @@ export class GameStore {
       }
       if (clock.flagged) return { status: 'win', winner: other(clock.flagged), reason: 'time' };
     }
-    return gameResult(game.position);
+    return gameResult(game.position, game.positions);
+  }
+
+  /**
+   * Värv, kelle nimel äpp või laud tegutseb: arvuti vastu alati inimene,
+   * kahe inimese mängus käigul olev pool (kui pole öeldud teisiti).
+   */
+  actor(game: Game, color?: Color): Color {
+    if (game.opponent) return game.humanColor;
+    return color ?? game.position.turn;
+  }
+
+  /** Alistumine. Tagastab false, kui mäng on juba läbi. */
+  resign(game: Game, color: Color): boolean {
+    if (this.isOver(game)) return false;
+    this.stopClock(game);
+    game.ending = { kind: 'resign', by: color };
+    game.drawOffer = null;
+    this.persist(game);
+    return true;
+  }
+
+  /**
+   * Viigipakkumine. Arvuti vastu otsustab AI kohe (nõustub, kui seis pole tema
+   * jaoks selgelt parem); kahe inimese mängus jääb pakkumine teisele poolele
+   * vastu võtta kuni järgmise käiguni. Kui vastane oli juba viiki pakkunud,
+   * tähendab pakkumine nõustumist.
+   */
+  offerDraw(game: Game, color: Color): 'accepted' | 'declined' | 'pending' | 'over' {
+    if (this.isOver(game)) return 'over';
+    if (game.opponent) {
+      const aiColor = other(game.humanColor);
+      const score = aiColor === 'white' ? evaluate(game.position) : -evaluate(game.position);
+      if (game.aiThinking || score > AI_DRAW_ACCEPT_SCORE) return 'declined';
+      this.agreeDraw(game);
+      return 'accepted';
+    }
+    if (game.drawOffer === other(color)) {
+      this.agreeDraw(game);
+      return 'accepted';
+    }
+    game.drawOffer = color;
+    this.persist(game);
+    return 'pending';
+  }
+
+  /** Lükkab vastase viigipakkumise tagasi. Tagastab false, kui pakkumist polnud. */
+  declineDraw(game: Game, color: Color): boolean {
+    if (game.drawOffer !== other(color)) return false;
+    game.drawOffer = null;
+    this.persist(game);
+    return true;
+  }
+
+  /** Viik kokkuleppel (näiteks kaks inimest laua taga). Tagastab false, kui mäng on läbi. */
+  agreeDraw(game: Game): boolean {
+    if (this.isOver(game)) return false;
+    this.stopClock(game);
+    game.ending = { kind: 'agreement' };
+    game.drawOffer = null;
+    this.persist(game);
+    return true;
+  }
+
+  /** Peatab kella ja arvestab käigul oleva poole kulunud aja maha. */
+  private stopClock(game: Game): void {
+    const clock = game.clock;
+    if (!clock || clock.runningSince === null) return;
+    const turn = game.position.turn;
+    clock[turn] = this.remaining(game, turn);
+    clock.runningSince = null;
   }
 
   /** Poole järelejäänud aeg millisekundites (käigul oleva poole kell käib). */
@@ -258,16 +351,22 @@ export class GameStore {
   async aiTurn(game: Game): Promise<OpponentMove | null> {
     if (!game.opponent || game.aiThinking || !this.isAiTurn(game)) return null;
     game.aiThinking = true;
+    this.notify(game);
     const plyBefore = game.history.length;
+    let moved = false;
     try {
       const choice = await this.opponents[game.opponent].chooseMove(game.position, game.level);
       // Kui vahepeal võeti käik tagasi või alustati uut, siis vastust ei kasutata.
       if (!choice || game.history.length !== plyBefore) return null;
-      this.play(game, choice.move);
       game.lastAiMove = choice;
+      game.aiThinking = false;
+      moved = true;
+      this.play(game, choice.move);
       return choice;
     } finally {
       game.aiThinking = false;
+      // Kui AI ei käinud (viga või tühistatud), peavad kuulajad ikkagi teada saama.
+      if (!moved) this.notify(game);
     }
   }
 
@@ -282,7 +381,7 @@ export class GameStore {
    * Kahe inimese mängus võetakse tagasi üks käik. Tagastab tagasi võetud käikude arvu.
    */
   undo(game: Game): number {
-    if (game.aiThinking) return 0;
+    if (game.aiThinking || game.ending) return 0;
     const isHumanPly = (i: number) => !game.opponent || game.positions[i]?.turn === game.humanColor;
     let last = -1;
     for (let i = game.moves.length - 1; i >= 0; i--) {
@@ -324,6 +423,7 @@ export class GameStore {
     const lastTime = game.moveTimes[game.moveTimes.length - 1];
     if (result.status !== 'ongoing' && lastTime) record.endedAt = lastTime;
     if (game.clock?.flagged) record.flagged = game.clock.flagged;
+    if (game.ending) record.ending = game.ending;
     return record;
   }
 
@@ -345,6 +445,7 @@ export class GameStore {
     game.history.push(formatMove(move));
     game.moveTimes.push(at);
     game.positions.push(game.position);
+    game.drawOffer = null;
   }
 
   private remember(game: Game): void {
@@ -356,8 +457,37 @@ export class GameStore {
     if (victim) this.games.delete(victim.id);
   }
 
+  /**
+   * Kuulab mängu muutusi (käik, tagasivõtt, AI mõtlemine, lõpp).
+   * Tagastab funktsiooni kuulamise lõpetamiseks või null, kui kuulajaid on liiga palju.
+   */
+  subscribe(id: string, listener: GameListener): (() => void) | null {
+    let set = this.listeners.get(id);
+    if (!set) {
+      set = new Set();
+      this.listeners.set(id, set);
+    }
+    if (set.size >= MAX_LISTENERS_PER_GAME) return null;
+    set.add(listener);
+    return () => {
+      set.delete(listener);
+      if (set.size === 0 && this.listeners.get(id) === set) this.listeners.delete(id);
+    };
+  }
+
+  private notify(game: Game): void {
+    for (const listener of this.listeners.get(game.id) ?? []) {
+      try {
+        listener(game);
+      } catch (error) {
+        this.onError(error);
+      }
+    }
+  }
+
   /** Salvestab mängu kettale; ühe mängu salvestused tehakse järjest. */
   private persist(game: Game): void {
+    this.notify(game);
     const records = this.records;
     if (!records) return;
     const record = this.toRecord(game);

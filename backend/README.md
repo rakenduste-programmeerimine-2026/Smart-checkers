@@ -5,9 +5,9 @@ Nutika kabelaua mänguserver. Laud (Arduino UNO R4 WiFi, 32 reed-lülitit, LED-r
 ## Mis siin praegu on
 
 - `src/game/squares.ts`: tumedate ruutude numeratsioon 0–31, mis vastab laua reed-lülitite bittidele.
-- `src/game/rules.ts`: kabe (vene kabe) reeglid, mis hõlmavad kohustuslikku löömist, lendavat tammi, türgi löögi keeldu, tammiks saamist löömise ajal ning võitu ja viiki.
+- `src/game/rules.ts`: kabe (vene kabe) reeglid, mis hõlmavad kohustuslikku löömist, lendavat tammi, türgi löögi keeldu, tammiks saamist löömise ajal ning võitu ja viiki. Viik tuleb 15 käigu järel ainult tammidega ilma löömiseta, kui sama seis kordub kolmandat korda, või kui 3+ tammi ei võida üksikut tammi 15 käiguga.
 - `src/game/sensors.ts`: laua 32-bitise hõivatusmaski tõlgendamine käiguks.
-- `src/ai/engine.ts`: kohalik AI mootor (negamax alfa-beeta kärpimisega). Tasemed on `beginner` (2 poolkäiku, teeb vahel vigu), `medium` (4 poolkäiku) ja `strong` (7 poolkäiku). Lisaks on `suggestMove` vihje andmiseks.
+- `src/ai/engine.ts`: kohalik AI mootor (negamax alfa-beeta kärpimisega). Tasemed on `beginner` (2 poolkäiku, teeb vahel vigu), `medium` (4 poolkäiku) ja `strong` (7 poolkäiku). Otsing süveneb järk-järgult ja mõtleb kõige rohkem 1 sekundi; kui aeg saab otsa, kasutatakse viimast lõpetatud sügavust. Lisaks on `suggestMove` vihje andmiseks.
 - `src/ai/claude.ts`: AI vastane välise AI API (Claude) kaudu. Mudel saab laua seisu ja nummerdatud seaduslikud käigud ning valib neist ühe, nii et ebaseaduslikku käiku ta teha ei saa. Kui API ei vasta, käib kohalik mootor.
 - `src/server/`: REST API (Fastify) ja mängude haldus (`games.ts`: kõik seisud, käigu tagasivõtt, AI taustal).
 - `src/board/`: füüsilise laua ühendus. `controller.ts` tunneb maskist käigu ära ja otsustab, mida LED-id ja LCD näitavad, `display.ts` teeb LED-riba numeratsiooni ja LCD teksti.
@@ -64,12 +64,23 @@ Kõik vastused on JSON-is. Vead tulevad kujul `{ "error": "..." }` ja koodiga 40
 | `GET` | `/api/games/:id/pdn` | – | PDN-fail (vene kabe, GameType 25) |
 | `POST` | `/api/games/import` | `{ pdn: "..." }` | `{ game }` (kahe inimese mänguks) |
 | `DELETE` | `/api/games/:id` | – | 204 |
-| `POST` | `/api/games/:id/moves` | `{ move: "c3-d4" }` | `{ game, aiMove }` (AI vastukäik kohe sama vastusega) |
-| `POST` | `/api/games/:id/hint` | – | `{ hint: "c3-d4" }` |
-| `POST` | `/api/games/:id/undo` | – | `{ game, undone }` (inimese viimane käik ja AI vastus) |
+| `POST` | `/api/games/:id/moves` | `{ move: "c3-d4", expectedPly?: 0 }` | `{ game, aiMove, duplicate? }` (AI vastukäik kohe sama vastusega) |
+| `POST` | `/api/games/:id/hint` | – | `{ hint: "c3-d4", detail: { from, path, captures } }` |
+| `POST` | `/api/games/:id/undo` | `{ expectedPly? }` | `{ game, undone }` (inimese viimane käik ja AI vastus) |
+| `POST` | `/api/games/:id/resign` | `{ color? }` | `{ game }` (arvuti vastu alistub inimene) |
+| `POST` | `/api/games/:id/draw` | `{ action?: "offer" \| "decline", color? }` | `{ status: "accepted" \| "declined" \| "pending", game }` |
+| `GET` | `/api/games/:id/analysis?level=medium&top=3` | – | `{ analysis: { score, summary, depth, bestMoves } }` |
+| `GET` | `/api/games/:id/events` | – | Server-Sent Events: sündmus `game` iga muutuse korral |
 | `POST` | `/api/ai/move` | `{ moves: ["c3-d4", ...], opponent?, level? }` | `{ position, aiMove }` (olekuta: käigud algusest) |
 
-`game` sisaldab välju `id`, `opponent`, `level`, `humanColor`, `turn`, `pieces` (`[{ square, color, king }]`), `legalMoves`, `history` ja `result` (`ongoing`, `win` koos `winner`-iga või `draw`).
+`game` sisaldab välju `id`, `opponent`, `level`, `humanColor`, `turn`, `pieces` (`[{ square, color, king }]`), `legalMoves`, `history`, `ply` (käikude arv), `lastMove` (viimane käik ruutudega, et äpp saaks selle esile tõsta), `aiThinking`, `drawOffer`, `canUndo`, `clock` ja `result`. `result` on `ongoing`, `win` koos `winner` ja `reason`-iga (`no-moves`, `time`, `resign`) või `draw` koos `reason`-iga (`king-moves`, `repetition`, `lone-king`, `agreement`).
+
+### Töökindlus äpi jaoks
+
+- **Ohutu kordus.** Saada käigu ja tagasivõtu juures `expectedPly` (mängu `ply` sinu teada). Kui vastus läks võrgus kaduma ja äpp saadab sama käigu uuesti, ei tehta seda teist korda: vastus on sama koos `duplicate: true`. Kui seis on vahepeal muutunud (näiteks käidi laual), tuleb 409 koos `stale: true` ja praeguse `game`-iga, nii et äpp saab kohe värskendada.
+- **Otseuuendused.** `GET /api/games/:id/events` hoiab ühenduse lahti ja saadab sündmuse `game` (`{ game, aiMove }`) iga muutuse korral: käik äpis või laual, AI hakkab mõtlema, AI käis, tagasivõtt, mängu lõpp. Nii ei pea äpp serverit pidevalt küsitlema. Ühendus saadab iga 15 s `: ping`, et võrk seda kinni ei paneks. Expos sobib näiteks `react-native-sse`, mis lubab saata ka `Authorization` päise. Ühe mängu kohta on lubatud kuni 20 ühendust.
+- **Viigipakkumine.** Arvuti vastu vastab AI kohe: nõustub, kui seis pole tema jaoks selgelt parem. Kahe inimese mängus jääb pakkumine (`drawOffer`) ootele, kuni teine pool nõustub (`offer`) või keeldub (`decline`), ja kaob järgmise käiguga.
+- **Analüüs.** `score` on valge vaatenurgast (100 = üks lihtnupp), `summary` on lühike eestikeelne tekst ("Väike eelis valgel") ja `bestMoves` parimad käigud koos ruutudega. Analüüs ja vihje kuuluvad AI päringulimiidi alla.
 
 `aiMove` sisaldab välju `move`, `from`, `path`, `captures`, `promotes`, `source` (`claude` või `engine`), `reason` (AI põhjendus) ja `fallbackReason` (miks kohalik mootor välise AI asemel käis).
 
@@ -119,7 +130,7 @@ LED-riba on üks 160 LED-iga tükk, mis käib ridade kaupa edasi-tagasi: `a1 →
 | B2 | Võta käik tagasi (ilma mänguta: uus mäng) | Vali või muuda |
 | B3 | Ava menüü | Sulge menüü |
 
-Menüüs on uus mäng, vastane (Claude, arvuti, inimene), raskusaste, sinu värv, male kell (väljas, 5, 10, 15 või 30 minutit) ja praeguse mängu kordus.
+Menüüs on uus mäng, vastane (Claude, arvuti, inimene), raskusaste, sinu värv, male kell (väljas, 5, 10, 15 või 30 minutit), praeguse mängu kordus, viigipakkumine ja alistumine. Kahe inimese mängus laua taga kehtib viik menüüst kohe; arvuti vastu otsustab AI. Mängu lõpus näitab LCD teisel real põhjust (näiteks "Seis kordus 3x" või "Alistumine").
 
 Kellaga mängus näitab LCD teisel real mõlema poole aega (`V 4:32    M 5:00`). Kell käivitub esimese käiguga ja kui aeg saab otsa, võidab vastane. Kui Claude API ei vasta ja käib kohalik mootor, kuvab LCD "Claude ei vasta / Käis arvuti". `GET /api/board/:boardId` näitab väljadega `online` ja `lastSeenAt`, kas laud on võrgus. Pärast uut mängu või tagasivõttu näitavad LED-id, kuhu nupp panna ja kust ära võtta, kuni laud on õiges seisus. Tammiks saamisel kuvab LCD "Tamm! Pane kroon peale".
 

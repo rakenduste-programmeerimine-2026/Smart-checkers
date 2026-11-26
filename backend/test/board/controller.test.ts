@@ -152,7 +152,9 @@ describe('BoardController', () => {
     expect(press(1).lcd[0]).toBe('>Kell:valjas    ');
     expect(press(2).lcd[0]).toBe('>Kell:5 min     ');
     expect(press(1).lcd[0]).toBe('>Kordus         ');
-    press(1);
+    expect(press(1).lcd[0]).toBe('>Paku viiki     ');
+    expect(press(1).lcd[0]).toBe('>Alistu         ');
+    expect(press(1).lcd[0]).toBe('>Uus mang       ');
     press(2);
     const game = board.game!;
     expect(game).toMatchObject({ opponent: 'engine', humanColor: 'black', clock: { initialMs: 300_000 } });
@@ -242,5 +244,52 @@ describe('BoardController', () => {
     expect(ledsOf(display)).toEqual({ b4: 'FF0000/blink', d4: 'B000FF/blink' });
     place(maskOf(game.position));
     expect(board.status()).toMatchObject({ state: 'play', boardPly: 1 });
+  });
+
+  /** Avab menüü ja liigub antud reale (0 = Uus mäng). */
+  const menuTo = (row: number) => {
+    press(3);
+    for (let i = 0; i < row; i++) press(1);
+    return board.update({});
+  };
+
+  it('menüüst saab alistuda', () => {
+    const game = startGame({ opponent: 'engine', humanColor: 'white' });
+    expect(menuTo(7).lcd[0]).toBe('>Alistu         ');
+    const end = press(2);
+    expect(store.result(game)).toEqual({ status: 'win', winner: 'black', reason: 'resign' });
+    expect(end.lcd).toEqual(['Must voitis!    ', 'Alistumine      ']);
+  });
+
+  it('kahe inimese mängus on viik menüüst kohe kokkulepitud', () => {
+    const game = startGame({ opponent: 'none' });
+    expect(menuTo(6).lcd[0]).toBe('>Paku viiki     ');
+    const end = press(2);
+    expect(store.result(game)).toEqual({ status: 'draw', reason: 'agreement' });
+    expect(end.lcd).toEqual(['Viik!           ', 'Kokkuleppel     ']);
+    expect(end.effect).toBe('draw');
+  });
+
+  it('AI keeldub viigist, kui tal on parem seis, ja ilma mänguta ei saa alistuda', () => {
+    const game = startGame({ opponent: 'engine', humanColor: 'white' });
+    game.position = setupPosition({ white: ['a1'], blackKings: ['h8', 'f8', 'd8'] });
+    game.positions = [game.position];
+    board.attach(game);
+    place(maskOf(game.position));
+    menuTo(6);
+    expect(press(2).lcd).toEqual(['Viik            ', 'Vastane keeldus ']);
+    expect(store.result(game).status).toBe('ongoing');
+
+    board = new BoardController('laud2', store, { now: () => t, timing: { settleMs: 100, errorMs: 1000 } });
+    menuTo(7);
+    expect(press(2).lcd[0]).toBe('Mang pole kaimas');
+  });
+
+  it('näitab viigi põhjust', () => {
+    const game = startGame({ opponent: 'none' });
+    game.position = { ...setupPosition({ whiteKings: ['a1', 'c1', 'e1'], blackKings: ['h8'] }), loneKingPlies: 30 };
+    game.positions = [game.position];
+    board.attach(game);
+    expect(place(maskOf(game.position)).lcd).toEqual(['Viik!           ', '3 tammi vs 1    ']);
   });
 });

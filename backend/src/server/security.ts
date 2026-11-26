@@ -66,6 +66,8 @@ function bucketOf(req: FastifyRequest): Bucket {
   if (req.method === 'POST' && (url === '/api/games' || url === '/api/games/:id/moves' || url === '/api/ai/move')) {
     return 'ai';
   }
+  // Analüüs ja vihje koormavad protsessorit.
+  if (url === '/api/games/:id/analysis' || url === '/api/games/:id/hint') return 'ai';
   return 'general';
 }
 

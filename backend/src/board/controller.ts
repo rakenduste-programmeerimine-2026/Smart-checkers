@@ -13,7 +13,7 @@
 import { finalSquare, formatMove, legalMoves } from '../game/rules.js';
 import { detectMove, occupancyMask, squaresInMask } from '../game/sensors.js';
 import type { Square } from '../game/squares.js';
-import type { Color, Move, Position } from '../game/types.js';
+import type { Color, DrawReason, Move, Position, WinReason } from '../game/types.js';
 import { suggestMove, type AiLevel } from '../ai/engine.js';
 import type { OpponentKind } from '../ai/opponent.js';
 import type { Game, GameStore } from '../server/games.js';
@@ -62,8 +62,16 @@ export interface BoardStatus {
   lastSeenAt: string | null;
 }
 
-type MenuItem = 'new' | 'opponent' | 'level' | 'color' | 'clock' | 'replay';
-const MENU_ITEMS: MenuItem[] = ['new', 'opponent', 'level', 'color', 'clock', 'replay'];
+type MenuItem = 'new' | 'opponent' | 'level' | 'color' | 'clock' | 'replay' | 'draw' | 'resign';
+const MENU_ITEMS: MenuItem[] = ['new', 'opponent', 'level', 'color', 'clock', 'replay', 'draw', 'resign'];
+
+const WIN_REASON: Record<WinReason, string> = { 'no-moves': 'B3 menüü', time: 'Aeg sai otsa', resign: 'Alistumine' };
+const DRAW_REASON: Record<DrawReason, string> = {
+  'king-moves': '15 tammikäiku',
+  repetition: 'Seis kordus 3x',
+  'lone-king': '3 tammi vs 1',
+  agreement: 'Kokkuleppel',
+};
 const CLOCK_MINUTES = [0, 5, 10, 15, 30];
 const OPPONENTS: OpponentSetting[] = ['claude', 'engine', 'none'];
 const LEVELS: AiLevel[] = ['beginner', 'medium', 'strong'];
@@ -338,6 +346,19 @@ export class BoardController {
       if (game && game.history.length > 0) this.startReplay(game);
       else this.flash(['Kordus', 'Pole käike']);
       this.menuIndex = null;
+    } else if (item === 'draw' || item === 'resign') {
+      this.menuIndex = null;
+      const game = this.game;
+      if (!game || this.store.isOver(game)) {
+        this.flash(['Mäng pole käimas', 'B3 menüü']);
+      } else if (item === 'resign') {
+        this.store.resign(game, this.store.actor(game));
+      } else if (!game.opponent) {
+        // Mõlemad mängijad on laua taga: viik kehtib kohe.
+        this.store.agreeDraw(game);
+      } else if (this.store.offerDraw(game, game.humanColor) !== 'accepted') {
+        this.flash(['Viik', 'Vastane keeldus']);
+      }
     } else if (item === 'opponent') {
       this.settings.opponent = next(OPPONENTS, this.settings.opponent);
     } else if (item === 'clock') {
@@ -387,12 +408,12 @@ export class BoardController {
     const result = this.store.result(game);
     if (result.status === 'win') {
       return {
-        lines: [result.winner === 'white' ? 'Valge võitis!' : 'Must võitis!', result.reason === 'time' ? 'Aeg sai otsa' : 'B3 menüü'],
+        lines: [result.winner === 'white' ? 'Valge võitis!' : 'Must võitis!', WIN_REASON[result.reason]],
         leds: [],
         effect: result.winner === 'white' ? 'win-white' : 'win-black',
       };
     }
-    if (result.status === 'draw') return { lines: ['Viik!', 'B3 menüü'], leds: [], effect: 'draw' };
+    if (result.status === 'draw') return { lines: ['Viik!', DRAW_REASON[result.reason]], leds: [], effect: 'draw' };
 
     const expected = occupancyMask(position.board);
     const counts = game.clock ? this.clockLine(game) : countLine(position);
@@ -494,7 +515,11 @@ export class BoardController {
               ? `Sina:${this.settings.humanColor === 'white' ? 'valge' : 'must'}`
               : item === 'clock'
                 ? `Kell:${this.settings.clockMinutes === 0 ? 'väljas' : `${this.settings.clockMinutes} min`}`
-                : 'Kordus';
+                : item === 'replay'
+                  ? 'Kordus'
+                  : item === 'draw'
+                    ? 'Paku viiki'
+                    : 'Alistu';
     return [`>${label}`, 'B1 edasi B2 vali'];
   }
 }

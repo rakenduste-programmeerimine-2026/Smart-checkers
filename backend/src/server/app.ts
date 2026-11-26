@@ -7,8 +7,8 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { applyMove, findMove, formatMove, initialPosition, legalMoves } from '../game/rules.js';
 import { squareName } from '../game/squares.js';
-import type { GameResult, Position } from '../game/types.js';
-import { suggestMove } from '../ai/engine.js';
+import type { GameResult, Move, Position } from '../game/types.js';
+import { KING_VALUE, MAN_VALUE, searchMoves, suggestMove } from '../ai/engine.js';
 import type { Opponent, OpponentKind, OpponentMove } from '../ai/opponent.js';
 import { registerBoardRoutes, type BoardTimingOptions } from '../board/routes.js';
 import { toPdn } from '../record/pdn.js';
@@ -52,7 +52,32 @@ const ListQuery = z.object({ limit: z.coerce.number().int().min(1).max(200).defa
 
 const ImportBody = z.object({ pdn: z.string().min(1).max(100_000) });
 
-const MoveBody = z.object({ move: z.string().min(4).max(64) });
+/**
+ * expectedPly = mitu käiku oli mängus äpi teada enne seda päringut. Kui see on
+ * antud, on päring ohutu korrata: sama käigu kordus ei tee midagi topelt ja
+ * vananenud seisust tehtud päring saab vastuseks 409.
+ */
+const MoveBody = z.object({ move: z.string().min(4).max(64), expectedPly: z.number().int().min(0).optional() });
+
+const UndoBody = z.object({ expectedPly: z.number().int().min(0).optional() }).default({});
+
+const ColorSchema = z.enum(['white', 'black']);
+
+/** Kahe inimese mängus võib öelda, kes alistub või viiki pakub; vaikimisi käigul olev pool. */
+const ResignBody = z.object({ color: ColorSchema.optional() }).default({});
+
+const DrawBody = z.object({ action: z.enum(['offer', 'decline']).default('offer'), color: ColorSchema.optional() }).default({});
+
+const AnalysisQuery = z.object({
+  level: Level.default('medium'),
+  top: z.coerce.number().int().min(1).max(10).default(3),
+});
+
+/** Analüüsi ja vihje mõtlemisaeg (ms). */
+export const ANALYSIS_TIME_MS = 700;
+
+/** SSE ühenduse elushoidmise intervall. */
+export const SSE_HEARTBEAT_MS = 15_000;
 
 const AiMoveBody = z.object({
   /** Käigud algseisust alates, näiteks ["c3-d4", "f6-e5"]. */
@@ -83,6 +108,16 @@ export function serializePosition(position: Position) {
   };
 }
 
+function serializeMove(move: Move) {
+  return {
+    move: formatMove(move),
+    from: squareName(move.from),
+    path: move.path.map(squareName),
+    captures: move.captures.map(squareName),
+    promotes: move.promotes,
+  };
+}
+
 export function serializeGame(game: Game, store: GameStore) {
   const result: GameResult = store.result(game);
   const clock = game.clock
@@ -94,6 +129,7 @@ export function serializeGame(game: Game, store: GameStore) {
       }
     : null;
   const moveTimes = game.moveTimes;
+  const lastMove = game.moves[game.moves.length - 1];
   return {
     id: game.id,
     opponent: game.opponent ?? 'none',
@@ -103,7 +139,12 @@ export function serializeGame(game: Game, store: GameStore) {
     history: game.history,
     moveTimes,
     clock,
+    /** Käikude arv; saada see tagasi `expectedPly`-na, et kordused oleksid ohutud. */
+    ply: game.history.length,
+    lastMove: lastMove ? serializeMove(lastMove) : null,
     aiThinking: game.aiThinking,
+    drawOffer: game.drawOffer,
+    canUndo: !game.ending && !game.aiThinking && game.history.length > 0,
     result,
     ...serializePosition(game.position),
   };
@@ -123,6 +164,40 @@ export function serializeAiMove(m: OpponentMove | null) {
   };
 }
 
+/** Seisu analüüs: hinnang (valge vaatenurgast, sentinuppudes) ja parimad käigud. */
+export function analyse(position: Position, level: 'beginner' | 'medium' | 'strong', top: number) {
+  const { choices, depth } = searchMoves(position, level, { timeMs: ANALYSIS_TIME_MS });
+  const sign = position.turn === 'white' ? 1 : -1;
+  const best = choices[0];
+  const score = best ? sign * best.score : sign * -100_000;
+  return {
+    turn: position.turn,
+    /** Positiivne = valgel parem. 100 = üks lihtnupp. */
+    score,
+    depth,
+    /** Lühike eestikeelne kokkuvõte, mida äpp saab otse näidata. */
+    summary: describeScore(score),
+    bestMoves: choices.slice(0, top).map((c) => ({ ...serializeMove(c.move), score: sign * c.score })),
+  };
+}
+
+function describeScore(score: number): string {
+  if (Math.abs(score) > 50_000) return score > 0 ? 'Valge võidab' : 'Must võidab';
+  const abs = Math.abs(score);
+  const side = score > 0 ? 'valgel' : 'mustal';
+  if (abs < 40) return 'Seis on võrdne';
+  if (abs < MAN_VALUE) return `Väike eelis ${side}`;
+  if (abs < KING_VALUE) return `Selge eelis ${side}`;
+  return `Suur eelis ${side}`;
+}
+
+/** Äpi seis on vananenud: vastus sisaldab praegust mängu, et äpp saaks järele jõuda. */
+class StaleError extends HttpError {
+  constructor(readonly game: Game) {
+    super(409, 'Mängu seis on vahepeal muutunud, värskenda');
+  }
+}
+
 export function buildApp(options: AppOptions): FastifyInstance {
   const app = Fastify({
     logger: options.logger ?? false,
@@ -136,6 +211,13 @@ export function buildApp(options: AppOptions): FastifyInstance {
     records: options.records,
     maxGames: options.maxGames,
   });
+  /** Avatud SSE ühendused, mis serveri sulgemisel lõpetatakse. */
+  const streams = new Set<() => void>();
+  // preClose: enne kui server ootab ühenduste sulgumist.
+  app.addHook('preClose', async () => {
+    for (const end of streams) end();
+    streams.clear();
+  });
   app.addHook('onClose', async () => store.flush());
 
   app.setErrorHandler((error: Error & { statusCode?: number }, req, reply) => {
@@ -143,6 +225,10 @@ export function buildApp(options: AppOptions): FastifyInstance {
     if (status >= 500) req.log.error({ err: error }, 'Serveri viga');
     const message =
       status >= 500 ? 'Serveri viga' : status === 413 ? 'Päring on liiga suur' : error.message;
+    if (error instanceof StaleError) {
+      reply.status(409).send({ error: message, stale: true, game: serializeGame(error.game, store) });
+      return;
+    }
     reply.status(status).send({ error: message });
   });
 
@@ -209,7 +295,16 @@ export function buildApp(options: AppOptions): FastifyInstance {
 
   app.post<{ Params: { id: string } }>('/api/games/:id/moves', async (req) => {
     const game = await getGame(req.params.id);
-    const { move: text } = parse(MoveBody, req.body);
+    const { move: text, expectedPly } = parse(MoveBody, req.body);
+    if (expectedPly !== undefined && expectedPly !== game.history.length) {
+      // Kordus: sama käik on juba tehtud (näiteks vastus läks võrgus kaduma).
+      const before = game.positions[expectedPly];
+      const previous = before ? findMove(before, text) : null;
+      if (previous && game.history[expectedPly] === formatMove(previous)) {
+        return { game: serializeGame(game, store), aiMove: serializeAiMove(game.lastAiMove), duplicate: true };
+      }
+      throw new StaleError(game);
+    }
     if (store.isOver(game)) throw new HttpError(409, 'Mäng on juba läbi');
     if (!store.canHumanMove(game)) throw new HttpError(409, 'Praegu on AI kord');
     const move = findMove(game.position, text);
@@ -221,7 +316,10 @@ export function buildApp(options: AppOptions): FastifyInstance {
 
   app.post<{ Params: { id: string } }>('/api/games/:id/undo', async (req) => {
     const game = await getGame(req.params.id);
+    const { expectedPly } = parse(UndoBody, req.body ?? {});
+    if (expectedPly !== undefined && expectedPly !== game.history.length) throw new StaleError(game);
     if (game.aiThinking) throw new HttpError(409, 'AI mõtleb, oota hetk');
+    if (game.ending) throw new HttpError(409, 'Mäng on läbi');
     const undone = store.undo(game);
     if (undone === 0) throw new HttpError(409, 'Pole käiku, mida tagasi võtta');
     return { game: serializeGame(game, store), undone };
@@ -229,8 +327,81 @@ export function buildApp(options: AppOptions): FastifyInstance {
 
   app.post<{ Params: { id: string } }>('/api/games/:id/hint', async (req) => {
     const game = await getGame(req.params.id);
+    if (store.isOver(game)) return { hint: null, detail: null };
     const hint = suggestMove(game.position);
-    return { hint: hint ? formatMove(hint.move) : null };
+    return { hint: hint ? formatMove(hint.move) : null, detail: hint ? serializeMove(hint.move) : null };
+  });
+
+  /** Alistumine. Arvuti vastu alistub alati inimene. */
+  app.post<{ Params: { id: string } }>('/api/games/:id/resign', async (req) => {
+    const game = await getGame(req.params.id);
+    const { color } = parse(ResignBody, req.body ?? {});
+    if (!store.resign(game, store.actor(game, color))) throw new HttpError(409, 'Mäng on juba läbi');
+    return { game: serializeGame(game, store) };
+  });
+
+  /**
+   * Viigipakkumine või -tagasilükkamine. Arvuti vastu vastab AI kohe
+   * (status accepted/declined); kahe inimese mängus jääb pakkumine ootele.
+   */
+  app.post<{ Params: { id: string } }>('/api/games/:id/draw', async (req) => {
+    const game = await getGame(req.params.id);
+    const { action, color } = parse(DrawBody, req.body ?? {});
+    const actor = store.actor(game, color);
+    if (action === 'decline') {
+      if (!store.declineDraw(game, actor)) throw new HttpError(409, 'Viigipakkumist pole');
+      return { status: 'declined', game: serializeGame(game, store) };
+    }
+    const status = store.offerDraw(game, actor);
+    if (status === 'over') throw new HttpError(409, 'Mäng on juba läbi');
+    return { status, game: serializeGame(game, store) };
+  });
+
+  /** Seisu analüüs: hinnang valge vaatenurgast ja parimad käigud. */
+  app.get<{ Params: { id: string } }>('/api/games/:id/analysis', async (req) => {
+    const game = await getGame(req.params.id);
+    const { level, top } = parse(AnalysisQuery, req.query);
+    return { analysis: analyse(game.position, level, top) };
+  });
+
+  /**
+   * Otseuuendused (Server-Sent Events): äpp saab iga muutuse (käik, AI mõtleb,
+   * tagasivõtt, mängu lõpp) kohe, ilma serverit pidevalt küsimata.
+   * Sündmus `game` sisaldab sama objekti, mis GET /api/games/:id.
+   */
+  app.get<{ Params: { id: string } }>('/api/games/:id/events', async (req, reply) => {
+    const game = await getGame(req.params.id);
+    const send = (g: Game) => {
+      const data = JSON.stringify({ game: serializeGame(g, store), aiMove: serializeAiMove(g.lastAiMove) });
+      reply.raw.write(`event: game\nid: ${g.history.length}\ndata: ${data}\n\n`);
+    };
+    const unsubscribe = store.subscribe(game.id, send);
+    if (!unsubscribe) throw new HttpError(429, 'Liiga palju ühendusi selle mänguga');
+    reply.hijack();
+    reply.raw.writeHead(200, {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-store',
+      connection: 'keep-alive',
+      'x-content-type-options': 'nosniff',
+      'x-accel-buffering': 'no',
+    });
+    reply.raw.write(`retry: 3000\n\n`);
+    send(game);
+    const heartbeat = setInterval(() => reply.raw.write(': ping\n\n'), SSE_HEARTBEAT_MS);
+    heartbeat.unref();
+    const close = () => {
+      clearInterval(heartbeat);
+      unsubscribe();
+    };
+    const end = () => {
+      close();
+      reply.raw.end();
+    };
+    streams.add(end);
+    req.raw.on('close', () => {
+      streams.delete(end);
+      close();
+    });
   });
 
   /** Olekuta AI käik: äpp saadab käigud algusest ja saab vastukäigu. */
