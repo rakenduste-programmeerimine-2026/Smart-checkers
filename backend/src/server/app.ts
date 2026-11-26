@@ -357,6 +357,15 @@ export function buildApp(options: AppOptions): FastifyInstance {
     return { status, game: serializeGame(game, store) };
   });
 
+  /**
+   * Mänguülevaade: iga käigu hinnang (best, good, inaccuracy, mistake, blunder,
+   * forced), parem käik ja mõlema poole täpsus. Pikk mäng võtab mõne sekundi.
+   */
+  app.get<{ Params: { id: string } }>('/api/games/:id/review', async (req) => {
+    const game = await getGame(req.params.id);
+    return { review: await store.review(game) };
+  });
+
   /** Seisu analüüs: hinnang valge vaatenurgast ja parimad käigud. */
   app.get<{ Params: { id: string } }>('/api/games/:id/analysis', async (req) => {
     const game = await getGame(req.params.id);

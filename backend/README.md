@@ -69,6 +69,7 @@ Kõik vastused on JSON-is. Vead tulevad kujul `{ "error": "..." }` ja koodiga 40
 | `POST` | `/api/games/:id/undo` | `{ expectedPly? }` | `{ game, undone }` (inimese viimane käik ja AI vastus) |
 | `POST` | `/api/games/:id/resign` | `{ color? }` | `{ game }` (arvuti vastu alistub inimene) |
 | `POST` | `/api/games/:id/draw` | `{ action?: "offer" \| "decline", color? }` | `{ status: "accepted" \| "declined" \| "pending", game }` |
+| `GET` | `/api/games/:id/review` | – | `{ review: { moves, summary, keyMoments } }` (mänguülevaade) |
 | `GET` | `/api/games/:id/analysis?level=medium&top=3` | – | `{ analysis: { score, summary, depth, bestMoves } }` |
 | `GET` | `/api/games/:id/events` | – | Server-Sent Events: sündmus `game` iga muutuse korral |
 | `POST` | `/api/ai/move` | `{ moves: ["c3-d4", ...], opponent?, level? }` | `{ position, aiMove }` (olekuta: käigud algusest) |
@@ -80,6 +81,7 @@ Kõik vastused on JSON-is. Vead tulevad kujul `{ "error": "..." }` ja koodiga 40
 - **Ohutu kordus.** Saada käigu ja tagasivõtu juures `expectedPly` (mängu `ply` sinu teada). Kui vastus läks võrgus kaduma ja äpp saadab sama käigu uuesti, ei tehta seda teist korda: vastus on sama koos `duplicate: true`. Kui seis on vahepeal muutunud (näiteks käidi laual), tuleb 409 koos `stale: true` ja praeguse `game`-iga, nii et äpp saab kohe värskendada.
 - **Otseuuendused.** `GET /api/games/:id/events` hoiab ühenduse lahti ja saadab sündmuse `game` (`{ game, aiMove }`) iga muutuse korral: käik äpis või laual, AI hakkab mõtlema, AI käis, tagasivõtt, mängu lõpp. Nii ei pea äpp serverit pidevalt küsitlema. Ühendus saadab iga 15 s `: ping`, et võrk seda kinni ei paneks. Expos sobib näiteks `react-native-sse`, mis lubab saata ka `Authorization` päise. Ühe mängu kohta on lubatud kuni 20 ühendust.
 - **Viigipakkumine.** Arvuti vastu vastab AI kohe: nõustub, kui seis pole tema jaoks selgelt parem. Kahe inimese mängus jääb pakkumine (`drawOffer`) ootele, kuni teine pool nõustub (`offer`) või keeldub (`decline`), ja kaob järgmise käiguga.
+- **Mänguülevaade.** `GET /api/games/:id/review` hindab iga käiku: `best`, `good`, `inaccuracy`, `mistake`, `blunder` või `forced` (ainus käik), koos parema käigu (`best`) ja kaotusega sentinuppudes (`loss`). `summary` annab mõlemale poolele täpsuse (0–100) ja vigade arvu, `keyMoments` kuni 3 suurima veaga käiku. Tulemus jäetakse meelde, kuni mäng muutub. Laual menüüst "Kordus" näitab LCD vea juures "Viga! e3-f4" ja parem käik süttib helesinisena.
 - **Analüüs.** `score` on valge vaatenurgast (100 = üks lihtnupp), `summary` on lühike eestikeelne tekst ("Väike eelis valgel") ja `bestMoves` parimad käigud koos ruutudega. Analüüs ja vihje kuuluvad AI päringulimiidi alla.
 
 `aiMove` sisaldab välju `move`, `from`, `path`, `captures`, `promotes`, `source` (`claude` või `engine`), `reason` (AI põhjendus) ja `fallbackReason` (miks kohalik mootor välise AI asemel käis).
