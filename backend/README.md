@@ -53,6 +53,8 @@ CORS päiseid server ei saada, sest äpp (Expo) ja laud ei ole brauserid.
 
 ## REST API
 
+Täielik kirjeldus on OpenAPI 3.1 kujul: `GET /api/openapi.json` (võtmeta). Ava see näiteks [Swagger Editoris](https://editor.swagger.io) või impordi Postmani. Test kontrollib, et iga serveri tee on dokumendis kirjas.
+
 Kõik vastused on JSON-is. Vead tulevad kujul `{ "error": "..." }` ja koodiga 400 (vigane sisend), 404 (mängu pole), 409 (pole sinu kord või mäng on läbi) või 422 (ebaseaduslik käik).
 
 | Meetod | Tee | Keha | Vastus |

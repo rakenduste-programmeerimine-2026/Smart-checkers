@@ -55,7 +55,7 @@ const routeOf = (req: FastifyRequest) => req.routeOptions.url ?? req.url.split('
 
 function requiredRole(req: FastifyRequest): Role {
   const url = routeOf(req);
-  if (url === '/health') return 'public';
+  if (url === '/health' || url === '/api/openapi.json') return 'public';
   if (req.method === 'POST' && url === '/api/board/:boardId/state') return 'board';
   return 'api';
 }

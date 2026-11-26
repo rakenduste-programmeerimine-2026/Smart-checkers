@@ -19,6 +19,7 @@ import { PuzzleLibrary, puzzleGame, type PuzzleDef } from '../puzzles/library.js
 import type { GameStore as RecordStore } from '../record/store.js';
 import { GameStore, type Game } from './games.js';
 import { HttpError, parse } from './http.js';
+import { openApiDocument } from './openapi.js';
 import { registerSecurity, type SecurityOptions } from './security.js';
 
 export type { Game } from './games.js';
@@ -291,6 +292,10 @@ export function buildApp(options: AppOptions): FastifyInstance {
 
   const startedAt = Date.now();
   app.get('/health', async () => ({ status: 'ok', uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000) }));
+
+  /** API kirjeldus (OpenAPI 3.1) äpi tegijatele. */
+  const openapi = openApiDocument();
+  app.get('/api/openapi.json', async () => openapi);
 
   app.post('/api/games', async (req, reply) => {
     const body = parse(CreateGameBody, req.body);
