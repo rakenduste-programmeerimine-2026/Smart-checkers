@@ -67,7 +67,14 @@ function bucketOf(req: FastifyRequest): Bucket {
     return 'ai';
   }
   // Analüüs ja vihje koormavad protsessorit.
-  if (url === '/api/games/:id/analysis' || url === '/api/games/:id/hint' || url === '/api/games/:id/review') return 'ai';
+  if (
+    url === '/api/games/:id/analysis' ||
+    url === '/api/games/:id/hint' ||
+    url === '/api/games/:id/review' ||
+    url === '/api/games/:id/puzzles'
+  ) {
+    return 'ai';
+  }
   return 'general';
 }
 

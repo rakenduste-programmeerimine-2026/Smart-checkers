@@ -15,6 +15,7 @@ import { toPdn } from '../record/pdn.js';
 import { ratedResults } from '../players/rating.js';
 import { registerPlayerRoutes } from '../players/routes.js';
 import { PlayerStore } from '../players/store.js';
+import { PuzzleLibrary, puzzleGame, type PuzzleDef } from '../puzzles/library.js';
 import type { GameStore as RecordStore } from '../record/store.js';
 import { GameStore, type Game } from './games.js';
 import { HttpError, parse } from './http.js';
@@ -37,6 +38,21 @@ export interface AppOptions {
   trustProxy?: boolean;
   /** Mängijad ja edetabel (vaikimisi ainult mälus). */
   players?: PlayerStore;
+  /** Kabeülesanded (vaikimisi sisseehitatud kogu). */
+  puzzles?: PuzzleLibrary;
+}
+
+const PuzzleStartBody = z.object({ playerId: z.string().min(1).max(64).optional() }).default({});
+
+export function serializePuzzle(p: PuzzleDef) {
+  return {
+    id: p.id,
+    title: p.title,
+    difficulty: p.difficulty,
+    goalMoves: p.goalMoves,
+    source: p.source,
+    ...serializePosition(p.position),
+  };
 }
 
 /** Suurim lubatud päringu keha (PDN-i import on kuni 100 000 märki). */
@@ -161,6 +177,17 @@ export function serializeGame(game: Game, store: GameStore, players?: PlayerStor
     aiThinking: game.aiThinking,
     drawOffer: game.drawOffer,
     players: { white: playerView(game.players.white, players), black: playerView(game.players.black, players) },
+    puzzle: game.puzzle
+      ? {
+          id: game.puzzle.id,
+          title: game.puzzle.title,
+          state: game.puzzle.state,
+          found: game.puzzle.found,
+          goalMoves: game.puzzle.goalMoves,
+          // Lahendus näidatakse alles pärast vale käiku.
+          solution: game.puzzle.solution,
+        }
+      : null,
     canUndo: !game.ending && !game.aiThinking && game.history.length > 0,
     result,
     ...serializePosition(game.position),
@@ -450,7 +477,43 @@ export function buildApp(options: AppOptions): FastifyInstance {
   });
 
   registerPlayerRoutes(app, players);
-  registerBoardRoutes(app, store, { ...options.board, players: () => players.current() });
+
+  const puzzles = options.puzzles ?? new PuzzleLibrary();
+  const getPuzzle = (id: string) => {
+    const puzzle = puzzles.get(id);
+    if (!puzzle) throw new HttpError(404, 'Ülesannet ei leitud');
+    return puzzle;
+  };
+
+  /** Kabeülesannete nimekiri (ilma lahenduseta). */
+  app.get('/api/puzzles', async () => ({
+    puzzles: puzzles.list().map((p) => ({ id: p.id, title: p.title, difficulty: p.difficulty, turn: p.position.turn, source: p.source })),
+  }));
+
+  app.get<{ Params: { id: string } }>('/api/puzzles/:id', async (req) => ({ puzzle: serializePuzzle(getPuzzle(req.params.id)) }));
+
+  /**
+   * Alustab ülesannet: tekib mäng antud seisust, inimene on käigul olev pool ja
+   * vastu mängib tugev mootor. Õige käigu järel on ülesanne lahendatud, vale käik
+   * näitab lahendust (`game.puzzle`).
+   */
+  app.post<{ Params: { id: string } }>('/api/puzzles/:id/start', async (req, reply) => {
+    const puzzle = getPuzzle(req.params.id);
+    const { playerId } = parse(PuzzleStartBody, req.body ?? {});
+    if (playerId && !(await players.get(playerId))) throw new HttpError(404, 'Mängijat ei leitud');
+    const game = store.create(puzzleGame(puzzle));
+    reply.status(201);
+    return { game: serializeGame(game, store, players) };
+  });
+
+  /** Teeb mängu suurematest vigadest ülesanded ("õpi oma vigadest"). */
+  app.post<{ Params: { id: string } }>('/api/games/:id/puzzles', async (req) => {
+    const game = await getGame(req.params.id);
+    const review = await store.review(game);
+    const made = puzzles.fromReview(game.id, game.positions, review);
+    return { puzzles: made.map(serializePuzzle) };
+  });
+  registerBoardRoutes(app, store, { ...options.board, players: () => players.current(), puzzles }, puzzles);
 
   return app;
 }

@@ -3,7 +3,9 @@
  *
  * Vene kabe on PDN-is GameType 25. Käigud on kujul "c3-d4" ja löömised "c3:e5:g7".
  */
-import type { GameResult } from '../game/types.js';
+import { parsePositionKey } from '../game/rules.js';
+import { squareName } from '../game/squares.js';
+import type { GameResult, Position } from '../game/types.js';
 import { Game, type GameRecord } from './game.js';
 
 export const RUSSIAN_DRAUGHTS_GAME_TYPE = '25';
@@ -21,7 +23,15 @@ const escape = (value: string): string => value.replace(/\\/g, '\\\\').replace(/
 /** PDN kuupäev kujul YYYY.MM.DD. */
 const pdnDate = (iso: string): string => iso.slice(0, 10).replace(/-/g, '.');
 
+/** PDN FEN, näiteks "W:Wc3,Ka1:Bh8" (K = tamm). */
+export function toFen(position: Position): string {
+  const side = (color: 'white' | 'black') =>
+    position.board.flatMap((p, sq) => (p?.color === color ? [`${p.king ? 'K' : ''}${squareName(sq)}`] : [])).join(',');
+  return `${position.turn === 'white' ? 'W' : 'B'}:W${side('white')}:B${side('black')}`;
+}
+
 export function toPdn(record: GameRecord): string {
+  const start = record.start ? parsePositionKey(record.start) : null;
   const headers: Array<[string, string]> = [
     ['Event', record.meta.event ?? 'Smart-checkers'],
     ['Date', pdnDate(record.meta.startedAt)],
@@ -30,8 +40,13 @@ export function toPdn(record: GameRecord): string {
     ['Result', resultToken(record.result)],
     ['GameType', RUSSIAN_DRAUGHTS_GAME_TYPE],
   ];
+  if (start) headers.push(['SetUp', '1'], ['FEN', toFen(start)]);
   const tokens: string[] = [];
-  record.moves.forEach((move, i) => {
+  // Kui algseisus on must käigul, algab numeratsioon "1...".
+  const offset = start?.turn === 'black' ? 1 : 0;
+  if (offset && record.moves.length > 0) tokens.push('1...');
+  record.moves.forEach((move, j) => {
+    const i = j + offset;
     if (i % 2 === 0) tokens.push(`${i / 2 + 1}.`);
     tokens.push(move.text);
   });

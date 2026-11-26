@@ -7,12 +7,12 @@
  * või uuesti läbi mängida.
  */
 import { randomUUID } from 'node:crypto';
-import { applyMove, findMove, formatMove, gameResult, initialPosition } from '../game/rules.js';
+import { applyMove, findMove, formatMove, gameResult, initialPosition, parsePositionKey, positionKey } from '../game/rules.js';
 import { opponent as other, type Color, type GameResult, type Move, type Position } from '../game/types.js';
-import { evaluate, type AiLevel } from '../ai/engine.js';
+import { evaluate, searchMoves, type AiLevel } from '../ai/engine.js';
 import { reviewGame, type GameReview } from '../analysis/review.js';
 import type { Opponent, OpponentKind, OpponentMove } from '../ai/opponent.js';
-import type { GameRecord } from '../record/game.js';
+import type { GameRecord, PuzzleState } from '../record/game.js';
 import { gameFromPdn } from '../record/pdn.js';
 import type { GameStore as RecordStore, GameSummary } from '../record/store.js';
 
@@ -46,7 +46,14 @@ export interface Game {
   players: GamePlayers;
   /** Lõpptulemus on edetabelisse kantud (mängu ei saa enam tagasi võtta). */
   rated: boolean;
+  /** Ülesanne: mäng algab antud seisust ja inimese käike kontrollitakse. */
+  puzzle: PuzzleState | null;
 }
+
+/** Ülesande käik loetakse õigeks, kui see on parimast kuni nii palju halvem. */
+export const PUZZLE_TOLERANCE = 30;
+/** Ülesande kontrolli mõtlemisaeg (ms). */
+export const PUZZLE_CHECK_MS = 400;
 
 export interface GamePlayers {
   white: string | null;
@@ -76,6 +83,9 @@ export interface NewGameOptions {
   /** Male kella algaeg millisekundites (kummalegi poolele). */
   clockMs?: number | null;
   players?: Partial<GamePlayers>;
+  /** Algseis (ülesanne). Vaikimisi tavaline algseis. */
+  start?: Position;
+  puzzle?: { id: string; title: string; goalMoves: number; expected?: string };
 }
 
 export const MAX_CLOCK_MS = 3 * 60 * 60 * 1000;
@@ -131,13 +141,14 @@ export class GameStore {
   }
 
   create(options: NewGameOptions, id: string = randomUUID()): Game {
-    const position = initialPosition();
-    const { clockMs, players, ...settings } = options;
+    const { clockMs, players, start, puzzle, ...settings } = options;
+    const position = start ?? initialPosition();
     const game: Game = {
       id,
       ...settings,
       players: { white: players?.white ?? null, black: players?.black ?? null },
       rated: false,
+      puzzle: puzzle ? { ...puzzle, found: 0, state: 'solving', solution: null } : null,
       clock: newClock(clockMs),
       position,
       history: [],
@@ -181,7 +192,9 @@ export class GameStore {
   /** Taastab mängu kirjest, mängides käigud uuesti läbi. */
   restore(record: GameRecord): Game {
     const settings = record.settings ?? { opponent: null, level: 'medium', humanColor: 'white' };
-    const position = initialPosition();
+    const start = record.start ? parsePositionKey(record.start) : null;
+    if (record.start && !start) throw new Error(`Salvestatud mängu ${record.id} algseis on vigane`);
+    const position = start ?? initialPosition();
     const game: Game = {
       id: record.id,
       opponent: settings.opponent,
@@ -201,6 +214,8 @@ export class GameStore {
       drawOffer: null,
       players: { white: settings.players?.white ?? null, black: settings.players?.black ?? null },
       rated: record.rated ?? false,
+      // Käigud mängitakse läbi ilma kontrollita, seejärel taastatakse ülesande olek.
+      puzzle: null,
     };
     for (const { text, at } of record.moves) {
       const move = findMove(game.position, text);
@@ -213,6 +228,7 @@ export class GameStore {
       game.clock.runningSince = null;
     }
     if (record.ending) game.ending = record.ending;
+    if (record.puzzle) game.puzzle = { ...record.puzzle };
     this.remember(game);
     return game;
   }
@@ -256,6 +272,10 @@ export class GameStore {
   }
 
   result(game: Game): GameResult {
+    const puzzle = game.puzzle;
+    if (puzzle && puzzle.state !== 'solving') {
+      return { status: 'win', winner: puzzle.state === 'solved' ? game.humanColor : other(game.humanColor), reason: 'puzzle' };
+    }
     const ending = game.ending;
     if (ending?.kind === 'resign') return { status: 'win', winner: other(ending.by), reason: 'resign' };
     if (ending?.kind === 'agreement') return { status: 'draw', reason: 'agreement' };
@@ -367,8 +387,34 @@ export class GameStore {
 
   /** Teeb käigu. Seaduslikkust kontrollib kutsuja (findMove või detectMove). */
   play(game: Game, move: Move): void {
+    const puzzle = game.puzzle;
+    if (puzzle?.state === 'solving' && game.position.turn === game.humanColor) this.checkPuzzleMove(game, puzzle, move);
     this.apply(game, move, this.now().toISOString());
     this.persist(game);
+  }
+
+  /** Ülesandes: kas inimese käik on (peaaegu) parim. Vale käik lõpetab ülesande. */
+  private checkPuzzleMove(game: Game, puzzle: PuzzleState, move: Move): void {
+    const { choices } = searchMoves(game.position, 'strong', { timeMs: PUZZLE_CHECK_MS });
+    const best = choices[0];
+    const text = formatMove(move);
+    const played = choices.find((c) => formatMove(c.move) === text);
+    if (!best || !played) return;
+    // Teadaolev lahendus on alati õige (lühike otsing ei pruugi seda näha).
+    if (puzzle.found === 0 && puzzle.expected === text) {
+      puzzle.found++;
+      if (puzzle.found >= puzzle.goalMoves) puzzle.state = 'solved';
+      return;
+    }
+    const winning = best.score > 50_000;
+    const ok = winning ? played.score > 50_000 : played.score >= best.score - PUZZLE_TOLERANCE;
+    if (!ok) {
+      puzzle.state = 'failed';
+      puzzle.solution = puzzle.found === 0 && puzzle.expected ? puzzle.expected : formatMove(best.move);
+      return;
+    }
+    puzzle.found++;
+    if (puzzle.found >= puzzle.goalMoves) puzzle.state = 'solved';
   }
 
   /** Kui on AI kord, laseb AI-l käia. Samaaegselt arvutab ühe mängu jaoks ainult üks AI. */
@@ -405,7 +451,7 @@ export class GameStore {
    * Kahe inimese mängus võetakse tagasi üks käik. Tagastab tagasi võetud käikude arvu.
    */
   undo(game: Game): number {
-    if (game.aiThinking || game.ending || game.rated) return 0;
+    if (game.aiThinking || game.ending || game.rated || game.puzzle) return 0;
     const isHumanPly = (i: number) => !game.opponent || game.positions[i]?.turn === game.humanColor;
     let last = -1;
     for (let i = game.moves.length - 1; i >= 0; i--) {
@@ -450,6 +496,9 @@ export class GameStore {
     if (game.clock?.flagged) record.flagged = game.clock.flagged;
     if (game.ending) record.ending = game.ending;
     if (game.rated) record.rated = true;
+    if (game.puzzle) record.puzzle = { ...game.puzzle };
+    const start = game.positions[0];
+    if (start && positionKey(start) !== positionKey(initialPosition())) record.start = positionKey(start);
     return record;
   }
 
