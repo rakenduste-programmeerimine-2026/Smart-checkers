@@ -229,4 +229,18 @@ describe('BoardController', () => {
     t += 10_000;
     expect(board.status().online).toBe(false);
   });
+
+  it('kui käik võetakse äpis tagasi ja tehakse uus, seatakse laud uuesti', () => {
+    const game = startGame({ opponent: 'none' });
+    store.play(game, findMove(game.position, 'c3-d4')!);
+    place(maskOf(game.position));
+    expect(board.status()).toMatchObject({ state: 'play', boardPly: 1 });
+    store.undo(game);
+    store.play(game, findMove(game.position, 'c3-b4')!);
+    const display = place(maskOf(applyMove(initialPosition(), findMove(initialPosition(), 'c3-d4')!)));
+    expect(board.status().state).toBe('setup');
+    expect(ledsOf(display)).toEqual({ b4: 'FF0000/blink', d4: 'B000FF/blink' });
+    place(maskOf(game.position));
+    expect(board.status()).toMatchObject({ state: 'play', boardPly: 1 });
+  });
 });

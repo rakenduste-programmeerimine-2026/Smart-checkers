@@ -206,3 +206,19 @@ describe('GameStore', () => {
     await expect(store.load('../secret')).rejects.toThrow(/Vigane mängu id/);
   });
 });
+
+describe('PDN lugemise vastupidavus', () => {
+  it('sügavalt pesastatud variandid ja kommentaarid loetakse kiiresti', () => {
+    const nested = `1. c3-d4 ${'('.repeat(40_000)}f6-e5${')'.repeat(40_000)} *`;
+    const start = performance.now();
+    expect(parsePdn(nested).moves).toEqual(['c3-d4']);
+    expect(() => parsePdn(`1. c3-d4 ${'{'.repeat(90_000)}`)).toThrow(/kommentaar/);
+    expect(performance.now() - start).toBeLessThan(500);
+  });
+
+  it('annab vea lõpetamata või liigsete sulgude korral', () => {
+    expect(() => parsePdn('1. c3-d4 (f6-e5 *')).toThrow(/variant/);
+    expect(() => parsePdn('1. c3-d4 ) *')).toThrow(/Liigne/);
+    expect(parsePdn('1. c3-d4 {kommentaar (sulgudega} f6-e5 *').moves).toEqual(['c3-d4', 'f6-e5']);
+  });
+});
