@@ -59,6 +59,38 @@ export interface ParsedPdn {
   result: string;
 }
 
+/**
+ * Eemaldab kommentaarid ({...}) ja (pesastatud) variandid ((...)) ühe läbimisega.
+ * Regulaaravaldistega korduv eemaldamine oleks sügavalt pesastatud sisendil ruutkeerukusega
+ * ja võiks serveri pikaks ajaks kinni panna.
+ */
+function stripCommentsAndVariations(text: string): string {
+  const out: string[] = [];
+  let depth = 0;
+  let inComment = false;
+  for (const ch of text) {
+    if (inComment) {
+      if (ch === '}') inComment = false;
+      continue;
+    }
+    if (ch === '{') {
+      inComment = true;
+      out.push(' ');
+    } else if (ch === '(') {
+      depth++;
+      out.push(' ');
+    } else if (ch === ')') {
+      if (depth === 0) throw new Error('Liigne ")"');
+      depth--;
+    } else if (depth === 0) {
+      out.push(ch);
+    }
+  }
+  if (inComment) throw new Error('Lõpetamata kommentaar');
+  if (depth > 0) throw new Error('Lõpetamata variant');
+  return out.join('');
+}
+
 /** Loeb ühe mängu PDN-teksti. Kommentaarid ({...}) ja variandid ((...)) jäetakse vahele. */
 export function parsePdn(text: string): ParsedPdn {
   const headers: Record<string, string> = {};
@@ -68,9 +100,7 @@ export function parsePdn(text: string): ParsedPdn {
     if (m[1] && m[2] !== undefined) headers[m[1]] = m[2].replace(/\\(.)/g, '$1');
   }
 
-  let body = text.replace(headerRe, ' ').replace(/\{[^}]*\}/g, ' ');
-  // Pesastatud variandid eemaldatakse seestpoolt väljapoole.
-  while (/\([^()]*\)/.test(body)) body = body.replace(/\([^()]*\)/g, ' ');
+  const body = stripCommentsAndVariations(text.replace(headerRe, ' '));
 
   const moves: string[] = [];
   let result = '*';
