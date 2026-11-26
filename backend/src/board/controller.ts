@@ -17,6 +17,7 @@ import type { Color, DrawReason, Move, Position, WinReason } from '../game/types
 import { suggestMove, type AiLevel } from '../ai/engine.js';
 import type { OpponentKind } from '../ai/opponent.js';
 import type { Game, GameStore } from '../server/games.js';
+import { puzzleGame, type PuzzleDef, type PuzzleLibrary } from '../puzzles/library.js';
 import { COLORS, led, makeDisplay, type BoardDisplay, type LedCommand } from './display.js';
 
 export interface BoardTiming {
@@ -64,10 +65,10 @@ export interface BoardStatus {
   lastSeenAt: string | null;
 }
 
-type MenuItem = 'new' | 'opponent' | 'level' | 'color' | 'player' | 'clock' | 'replay' | 'draw' | 'resign';
-const MENU_ITEMS: MenuItem[] = ['new', 'opponent', 'level', 'color', 'player', 'clock', 'replay', 'draw', 'resign'];
+type MenuItem = 'new' | 'opponent' | 'level' | 'color' | 'player' | 'clock' | 'puzzle' | 'replay' | 'draw' | 'resign';
+const MENU_ITEMS: MenuItem[] = ['new', 'opponent', 'level', 'color', 'player', 'clock', 'puzzle', 'replay', 'draw', 'resign'];
 
-const WIN_REASON: Record<WinReason, string> = { 'no-moves': 'B3 menüü', time: 'Aeg sai otsa', resign: 'Alistumine' };
+const WIN_REASON: Record<WinReason, string> = { 'no-moves': 'B3 menüü', time: 'Aeg sai otsa', resign: 'Alistumine', puzzle: 'Ülesanne' };
 const DRAW_REASON: Record<DrawReason, string> = {
   'king-moves': '15 tammikäiku',
   repetition: 'Seis kordus 3x',
@@ -88,11 +89,16 @@ export interface BoardControllerOptions {
   now?: () => number;
   /** Edetabeli mängijad menüü jaoks (parim eespool). */
   players?: () => { id: string; name: string }[];
+  /** Kabeülesanded menüü jaoks. */
+  puzzles?: Pick<PuzzleLibrary, 'next'>;
 }
 
 export class BoardController {
   readonly settings: BoardSettings = { opponent: 'claude', level: 'medium', humanColor: 'white', clockMinutes: 0, playerId: null };
   private readonly players: () => { id: string; name: string }[];
+  private readonly puzzles: Pick<PuzzleLibrary, 'next'> | undefined;
+  /** Viimati laual alustatud ülesanne (menüü valib järgmise). */
+  private lastPuzzleId: string | null = null;
   private readonly timing: BoardTiming;
   private readonly now: () => number;
 
@@ -122,6 +128,15 @@ export class BoardController {
     this.timing = { ...DEFAULT_TIMING, ...options.timing };
     this.now = options.now ?? Date.now;
     this.players = options.players ?? (() => []);
+    this.puzzles = options.puzzles;
+  }
+
+  /** Alustab laual ülesannet: laud tuleb seada ülesande seisu. */
+  startPuzzle(puzzle: PuzzleDef): Game {
+    const game = this.store.create(puzzleGame(puzzle));
+    this.lastPuzzleId = puzzle.id;
+    this.attach(game);
+    return game;
   }
 
   get game(): Game | null {
@@ -306,6 +321,10 @@ export class BoardController {
   }
 
   private showHint(game: Game): void {
+    if (game.puzzle) {
+      this.flash(['Ülesandes', 'vihjet pole']);
+      return;
+    }
     if (this.needsSetup || this.boardPly < game.history.length || !this.store.canHumanMove(game)) {
       this.flash(['Vihjet pole', 'Praegu ei saa']);
       return;
@@ -360,6 +379,11 @@ export class BoardController {
       if (game && game.history.length > 0) this.startReplay(game);
       else this.flash(['Kordus', 'Pole käike']);
       this.menuIndex = null;
+    } else if (item === 'puzzle') {
+      this.menuIndex = null;
+      const puzzle = this.puzzles?.next(this.lastPuzzleId);
+      if (puzzle) this.startPuzzle(puzzle);
+      else this.flash(['Ülesandeid', 'pole']);
     } else if (item === 'draw' || item === 'resign') {
       this.menuIndex = null;
       const game = this.game;
@@ -422,6 +446,16 @@ export class BoardController {
     if (this.boardPly < game.history.length) return this.pendingDisplay(game, mask);
 
     const position = game.position;
+    const puzzle = game.puzzle;
+    if (puzzle?.state === 'solved') return { lines: ['Lahendatud!', 'B3: järgmine'], leds: [], effect: `win-${game.humanColor}` };
+    if (puzzle?.state === 'failed') {
+      const before = game.positions[game.positions.length - 2];
+      const right = before && puzzle.solution ? findMoveText(before, puzzle.solution) : null;
+      return {
+        lines: ['Vale käik!', `Õige: ${puzzle.solution ?? '?'}`],
+        leds: right ? [led(right.from, COLORS.hint), led(finalSquare(right), COLORS.hint, 'blink')] : [],
+      };
+    }
     const result = this.store.result(game);
     if (result.status === 'win') {
       return {
@@ -433,7 +467,13 @@ export class BoardController {
     if (result.status === 'draw') return { lines: ['Viik!', DRAW_REASON[result.reason]], leds: [], effect: 'draw' };
 
     const expected = occupancyMask(position.board);
-    const counts = game.clock ? this.clockLine(game) : countLine(position);
+    const counts = puzzle
+      ? puzzle.goalMoves > 1
+        ? `Käik ${puzzle.found + 1}/${puzzle.goalMoves}`
+        : 'Leia parim käik'
+      : game.clock
+        ? this.clockLine(game)
+        : countLine(position);
     if (game.aiThinking) {
       const leds = mask !== expected && this.stableFor(this.timing.errorMs) ? errorLeds(expected, mask) : [];
       return { lines: ['AI mõtleb...', counts], leds };
@@ -541,7 +581,9 @@ export class BoardController {
             ? `Tase:${LEVEL_LABEL[this.settings.level]}`
             : item === 'color'
               ? `Sina:${this.settings.humanColor === 'white' ? 'valge' : 'must'}`
-              : item === 'player'
+              : item === 'puzzle'
+                ? 'Ülesanne'
+                : item === 'player'
                 ? `Mängija:${this.players().find((p) => p.id === this.settings.playerId)?.name ?? 'külaline'}`
               : item === 'clock'
                 ? `Kell:${this.settings.clockMinutes === 0 ? 'väljas' : `${this.settings.clockMinutes} min`}`
@@ -596,6 +638,7 @@ function countLine(position: Position): string {
 
 function turnLine(game: Game): string {
   const turn = game.position.turn;
+  if (game.puzzle && turn === game.humanColor) return `Ülesanne: ${turn === 'white' ? 'valge' : 'must'}`;
   if (!game.opponent) return turn === 'white' ? 'Valge kord' : 'Musta kord';
   if (turn !== game.humanColor) return 'AI kord';
   return `Sinu kord: ${turn === 'white' ? 'valge' : 'must'}`;

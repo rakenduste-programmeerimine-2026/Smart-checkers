@@ -49,6 +49,23 @@ export interface GameRecord {
   ending?: { kind: 'resign'; by: 'white' | 'black' } | { kind: 'agreement' };
   /** Tulemus on edetabelisse kantud. */
   rated?: boolean;
+  /** Algseis `positionKey` kujul, kui mäng ei alanud tavalisest algseisust (ülesanne). */
+  start?: string;
+  /** Ülesande olek. */
+  puzzle?: PuzzleState;
+}
+
+export interface PuzzleState {
+  id: string;
+  title: string;
+  /** Mitu õiget käiku tuleb leida. */
+  goalMoves: number;
+  found: number;
+  /** Teadaolev lahendus esimesele käigule. */
+  expected?: string;
+  state: 'solving' | 'solved' | 'failed';
+  /** Õige käik, kui ülesanne ebaõnnestus. */
+  solution: string | null;
 }
 
 export interface GameOptions {

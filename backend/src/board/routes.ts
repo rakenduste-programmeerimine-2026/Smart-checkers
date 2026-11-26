@@ -10,6 +10,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { GameStore } from '../server/games.js';
 import { HttpError, parse } from '../server/http.js';
+import type { PuzzleLibrary } from '../puzzles/library.js';
 import { BoardController, type BoardControllerOptions } from './controller.js';
 
 export type BoardTimingOptions = BoardControllerOptions;
@@ -45,7 +46,14 @@ const NewGameBody = z.object({
   playerId: z.string().min(1).max(64).nullable().optional(),
 });
 
-export function registerBoardRoutes(app: FastifyInstance, store: GameStore, options: BoardControllerOptions = {}): void {
+const PuzzleBody = z.object({ puzzleId: z.string().min(1).max(64) });
+
+export function registerBoardRoutes(
+  app: FastifyInstance,
+  store: GameStore,
+  options: BoardControllerOptions = {},
+  puzzles?: PuzzleLibrary,
+): void {
   const boards = new Map<string, BoardController>();
 
   const board = (params: unknown): BoardController => {
@@ -87,6 +95,17 @@ export function registerBoardRoutes(app: FastifyInstance, store: GameStore, opti
     const game = await store.load(gameId);
     if (!game) throw new HttpError(404, 'Mängu ei leitud');
     controller.startReplay(game);
+    return view(controller);
+  });
+
+  /** Alustab laual kabeülesannet: LED-id näitavad, kuhu nupud panna. */
+  app.post('/api/board/:boardId/puzzle', async (req, reply) => {
+    const controller = board(req.params);
+    const { puzzleId } = parse(PuzzleBody, req.body);
+    const puzzle = puzzles?.get(puzzleId);
+    if (!puzzle) throw new HttpError(404, 'Ülesannet ei leitud');
+    controller.startPuzzle(puzzle);
+    reply.status(201);
     return view(controller);
   });
 

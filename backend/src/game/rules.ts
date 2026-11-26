@@ -201,6 +201,15 @@ export function positionKey(position: Position): string {
   return key;
 }
 
+/** Loeb seisu `positionKey` kujult tagasi. Tagastab null, kui tekst on vigane. */
+export function parsePositionKey(key: string): Position | null {
+  if (!/^[wb][.wWbB]{32}$/.test(key)) return null;
+  const board: (Piece | null)[] = [...key.slice(1)].map((c) =>
+    c === '.' ? null : { color: c.toLowerCase() === 'w' ? 'white' : 'black', king: c === 'W' || c === 'B' },
+  );
+  return { board, turn: key[0] === 'w' ? 'white' : 'black', quietKingPlies: 0 };
+}
+
 /** Mitu korda viimane seis ajaloos esineb (sh viimane ise). */
 export function repetitionCount(history: readonly Position[]): number {
   const last = history[history.length - 1];

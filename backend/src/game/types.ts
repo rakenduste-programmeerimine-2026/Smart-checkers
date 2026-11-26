@@ -39,7 +39,8 @@ export type GameResult =
   | { status: 'win'; winner: Color; reason: WinReason }
   | { status: 'draw'; reason: DrawReason };
 
-export type WinReason = 'no-moves' | 'time' | 'resign';
+/** puzzle = ülesanne lahendati (inimene võitis) või ebaõnnestus (arvuti võitis). */
+export type WinReason = 'no-moves' | 'time' | 'resign' | 'puzzle';
 /**
  * king-moves = 30 tammikäiku ilma löömiseta, repetition = sama seis kolmandat korda,
  * lone-king = 3+ tammi ei võitnud üksikut tammi 15 käiguga, agreement = kokkulepe.
